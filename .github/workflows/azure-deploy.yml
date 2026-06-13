@@ -1,0 +1,92 @@
+# Build and deploy the Hocus Pokers app (frontend + Express API) to Azure Web App.
+# Docs: https://github.com/Azure/webapps-deploy
+#
+# Required GitHub secrets (set in repo Settings → Secrets and variables → Actions):
+#   AZUREAPPSERVICE_CLIENTID       - federated credential client id
+#   AZUREAPPSERVICE_TENANTID       - Azure AD tenant id
+#   AZUREAPPSERVICE_SUBSCRIPTIONID - subscription id
+#
+# In the App Service configuration, set the app setting:
+#   SQL_CONNECTION_STRING  - Azure SQL connection string (omit to run in seed mode)
+# and the Startup Command:
+#   npm start
+
+name: Build and deploy Hocus Pokers to Azure
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  AZURE_WEBAPP_NAME: hocuspokers-web # change to match your App Service name
+  NODE_VERSION: "22.x"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install and build frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install and build server
+        run: |
+          npm --prefix server ci
+          npm --prefix server run build
+
+      - name: Prune server dev dependencies
+        run: npm --prefix server prune --omit=dev
+
+      - name: Assemble deployment package
+        run: |
+          mkdir -p deploy/server
+          cp -r dist deploy/dist
+          cp package.json deploy/package.json
+          cp -r server/dist deploy/server/dist
+          cp -r server/node_modules deploy/server/node_modules
+          cp server/package.json deploy/server/package.json
+
+      - name: Upload artifact for deployment job
+        uses: actions/upload-artifact@v4
+        with:
+          name: hocus-pokers
+          path: deploy
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: hocus-pokers
+          path: .
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID }}
+
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          slot-name: Production
+          package: .

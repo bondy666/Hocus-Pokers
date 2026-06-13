@@ -1,0 +1,297 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.41.2.15936",
+      "templateHash": "3960065862239736559"
+    }
+  },
+  "parameters": {
+    "baseName": {
+      "type": "string",
+      "defaultValue": "hocuspokers",
+      "metadata": {
+        "description": "Base name used to derive resource names."
+      }
+    },
+    "environment": {
+      "type": "string",
+      "defaultValue": "prod",
+      "metadata": {
+        "description": "Environment short name (e.g. prod, dev)."
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Azure region for all resources."
+      }
+    },
+    "appServiceSku": {
+      "type": "string",
+      "defaultValue": "B1",
+      "metadata": {
+        "description": "App Service plan SKU."
+      }
+    },
+    "nodeVersion": {
+      "type": "string",
+      "defaultValue": "22-lts",
+      "metadata": {
+        "description": "Node runtime version for the web app."
+      }
+    },
+    "sqlAdminUser": {
+      "type": "string",
+      "defaultValue": "hpadmin",
+      "metadata": {
+        "description": "SQL administrator login."
+      }
+    },
+    "sqlAdminPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "SQL administrator password."
+      }
+    },
+    "adminEmails": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Comma-separated list of organiser emails permitted to make changes. Empty = any signed-in user."
+      }
+    },
+    "googleClientId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Google OAuth client ID (from Google Cloud console). Leave empty to disable Google sign-in."
+      }
+    },
+    "googleClientSecret": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Google OAuth client secret."
+      }
+    },
+    "microsoftClientId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Microsoft (Entra ID) application client ID. Leave empty to disable Microsoft sign-in."
+      }
+    },
+    "microsoftClientSecret": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Microsoft (Entra ID) client secret."
+      }
+    },
+    "microsoftTenant": {
+      "type": "string",
+      "defaultValue": "common",
+      "metadata": {
+        "description": "Microsoft token issuer tenant. Use \"common\" to allow both work/school and personal Microsoft accounts."
+      }
+    },
+    "allowAzureServices": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Allow other Azure services to reach the SQL server (App Service outbound)."
+      }
+    }
+  },
+  "variables": {
+    "suffix": "[uniqueString(resourceGroup().id)]",
+    "webAppName": "[format('app-{0}-{1}-{2}', parameters('baseName'), parameters('environment'), variables('suffix'))]",
+    "planName": "[format('plan-{0}-{1}', parameters('baseName'), parameters('environment'))]",
+    "sqlServerName": "[format('sql-{0}-{1}-{2}', parameters('baseName'), parameters('environment'), variables('suffix'))]",
+    "sqlDbName": "[format('sqldb-{0}-{1}', parameters('baseName'), parameters('environment'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Web/serverfarms",
+      "apiVersion": "2023-12-01",
+      "name": "[variables('planName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "[parameters('appServiceSku')]"
+      },
+      "kind": "linux",
+      "properties": {
+        "reserved": true
+      }
+    },
+    {
+      "type": "Microsoft.Sql/servers",
+      "apiVersion": "2023-08-01-preview",
+      "name": "[variables('sqlServerName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "administratorLogin": "[parameters('sqlAdminUser')]",
+        "administratorLoginPassword": "[parameters('sqlAdminPassword')]",
+        "minimalTlsVersion": "1.2",
+        "publicNetworkAccess": "Enabled"
+      }
+    },
+    {
+      "type": "Microsoft.Sql/servers/databases",
+      "apiVersion": "2023-08-01-preview",
+      "name": "[format('{0}/{1}', variables('sqlServerName'), variables('sqlDbName'))]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "Basic",
+        "tier": "Basic"
+      },
+      "properties": {
+        "collation": "SQL_Latin1_General_CP1_CI_AS",
+        "maxSizeBytes": 2147483648
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('allowAzureServices')]",
+      "type": "Microsoft.Sql/servers/firewallRules",
+      "apiVersion": "2023-08-01-preview",
+      "name": "[format('{0}/{1}', variables('sqlServerName'), 'AllowAllAzureIps')]",
+      "properties": {
+        "startIpAddress": "0.0.0.0",
+        "endIpAddress": "0.0.0.0"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Web/sites",
+      "apiVersion": "2023-12-01",
+      "name": "[variables('webAppName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('planName'))]",
+        "httpsOnly": true,
+        "siteConfig": {
+          "linuxFxVersion": "[format('NODE|{0}', parameters('nodeVersion'))]",
+          "appCommandLine": "npm start",
+          "ftpsState": "Disabled",
+          "minTlsVersion": "1.2",
+          "appSettings": [
+            {
+              "name": "NODE_ENV",
+              "value": "production"
+            },
+            {
+              "name": "PORT",
+              "value": "8080"
+            },
+            {
+              "name": "WEBSITES_PORT",
+              "value": "8080"
+            },
+            {
+              "name": "SCM_DO_BUILD_DURING_DEPLOYMENT",
+              "value": "false"
+            },
+            {
+              "name": "SQL_CONNECTION_STRING",
+              "value": "[format('Server=tcp:{0},1433;Database={1};User Id={2};Password={3};Encrypt=true;TrustServerCertificate=false;Connection Timeout=30;', reference(resourceId('Microsoft.Sql/servers', variables('sqlServerName')), '2023-08-01-preview').fullyQualifiedDomainName, variables('sqlDbName'), parameters('sqlAdminUser'), parameters('sqlAdminPassword'))]"
+            },
+            {
+              "name": "ADMIN_EMAILS",
+              "value": "[parameters('adminEmails')]"
+            },
+            {
+              "name": "GOOGLE_PROVIDER_AUTHENTICATION_SECRET",
+              "value": "[parameters('googleClientSecret')]"
+            },
+            {
+              "name": "MICROSOFT_PROVIDER_AUTHENTICATION_SECRET",
+              "value": "[parameters('microsoftClientSecret')]"
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/serverfarms', variables('planName'))]",
+        "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Web/sites/config",
+      "apiVersion": "2023-12-01",
+      "name": "[format('{0}/{1}', variables('webAppName'), 'authsettingsV2')]",
+      "properties": {
+        "platform": {
+          "enabled": true
+        },
+        "globalValidation": {
+          "requireAuthentication": false,
+          "unauthenticatedClientAction": "AllowAnonymous"
+        },
+        "login": {
+          "tokenStore": {
+            "enabled": true
+          }
+        },
+        "identityProviders": {
+          "azureActiveDirectory": {
+            "enabled": "[not(empty(parameters('microsoftClientId')))]",
+            "registration": {
+              "openIdIssuer": "[format('https://login.microsoftonline.com/{0}/v2.0', parameters('microsoftTenant'))]",
+              "clientId": "[parameters('microsoftClientId')]",
+              "clientSecretSettingName": "MICROSOFT_PROVIDER_AUTHENTICATION_SECRET"
+            },
+            "validation": {
+              "allowedAudiences": [
+                "[parameters('microsoftClientId')]"
+              ]
+            }
+          },
+          "google": {
+            "enabled": "[not(empty(parameters('googleClientId')))]",
+            "registration": {
+              "clientId": "[parameters('googleClientId')]",
+              "clientSecretSettingName": "GOOGLE_PROVIDER_AUTHENTICATION_SECRET"
+            },
+            "login": {
+              "scopes": [
+                "openid",
+                "email",
+                "profile"
+              ]
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', variables('webAppName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "webAppName": {
+      "type": "string",
+      "value": "[variables('webAppName')]"
+    },
+    "webAppUrl": {
+      "type": "string",
+      "value": "[format('https://{0}', reference(resourceId('Microsoft.Web/sites', variables('webAppName')), '2023-12-01').defaultHostName)]"
+    },
+    "sqlServerFqdn": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Sql/servers', variables('sqlServerName')), '2023-08-01-preview').fullyQualifiedDomainName]"
+    },
+    "sqlDatabaseName": {
+      "type": "string",
+      "value": "[variables('sqlDbName')]"
+    }
+  }
+}
