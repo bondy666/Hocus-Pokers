@@ -25,6 +25,7 @@ export interface TournamentDto {
   prizePool: number;
   status: "live" | "upcoming" | "complete";
   winnerId?: string;
+  hostId?: string;
 }
 
 export const members: MemberDto[] = [

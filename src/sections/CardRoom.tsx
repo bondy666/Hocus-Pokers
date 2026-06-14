@@ -9,6 +9,7 @@ import {
 } from "../data.ts";
 import { useClub } from "../ClubContext.ts";
 import BanterBox from "../components/BanterBox.tsx";
+import NotificationToggle from "../components/NotificationToggle.tsx";
 
 const formatDate = (iso: string): string =>
   new Date(iso).toLocaleDateString("en-GB", {
@@ -72,6 +73,8 @@ export default function CardRoom() {
           <NightCard kind="next" tournament={next} members={members} />
           <NightCard kind="previous" tournament={previous} members={members} />
         </div>
+
+        <NotificationToggle />
 
         <BanterBox />
       </div>

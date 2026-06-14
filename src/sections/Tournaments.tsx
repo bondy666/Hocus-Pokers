@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { gbp, winnerName, type Tournament, type TournamentStatus, type Member } from "../data.ts";
 import { useClub } from "../ClubContext.ts";
 import { updateTournament, deleteTournament, type NewTournament } from "../api.ts";
@@ -53,7 +54,8 @@ export default function Tournaments() {
               <li className="tournament" key={t.id}>
                 <div className="tournament-main">
                   <div className="tournament-top">
-                    <span className={`status status-${t.status}`}>
+                    {/* Fix 3: whiteSpace nowrap prevents status text from wrapping */}
+                    <span className={`status status-${t.status}`} style={{ whiteSpace: "nowrap" }}>
                       {t.status === "live" && <span className="live-dot" />}
                       {statusLabel[t.status]}
                     </span>
@@ -87,7 +89,15 @@ export default function Tournaments() {
                   </div>
                   <div>
                     <span className="tm-value">
-                      {t.status === "complete" ? winnerName(members, t.winnerId) : "—"}
+                      {t.status === "complete" && t.winnerId ? (
+                        <Link className="player-link" to={`/player/${t.winnerId}`}>
+                          {winnerName(members, t.winnerId)}
+                        </Link>
+                      ) : t.status === "complete" ? (
+                        winnerName(members, t.winnerId)
+                      ) : (
+                        "—"
+                      )}
                     </span>
                     <span className="tm-label">Winner</span>
                   </div>

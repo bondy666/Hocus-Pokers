@@ -1,5 +1,6 @@
 import { useState, useRef, type FormEvent, type ChangeEvent } from "react";
-import { gbp, winRate, type Member } from "../data.ts";
+import { Link } from "react-router-dom";
+import { gbp, profileWinRate, PROFILE_GAMES, type Member } from "../data.ts";
 import { useClub } from "../ClubContext.ts";
 import { createMember, updateMember, uploadMemberAvatar, type NewMember } from "../api.ts";
 
@@ -120,7 +121,11 @@ function MemberCard({
             )}
           </div>
           <div>
-            <h3 className="member-name">{member.name}</h3>
+            <h3 className="member-name">
+              <Link className="player-link" to={`/player/${member.id}`}>
+                {member.name}
+              </Link>
+            </h3>
             <p className="member-meta">
               {member.nickname ? `“${member.nickname}” · ` : ""}
               {member.location} · since {member.joined}
@@ -139,11 +144,11 @@ function MemberCard({
           <span className="ms-label">Wins</span>
         </div>
         <div>
-          <span className="ms-value">{member.games}</span>
+          <span className="ms-value">{PROFILE_GAMES}</span>
           <span className="ms-label">Games</span>
         </div>
         <div>
-          <span className="ms-value">{winRate(member)}%</span>
+          <span className="ms-value">{profileWinRate(member)}%</span>
           <span className="ms-label">Win rate</span>
         </div>
       </div>

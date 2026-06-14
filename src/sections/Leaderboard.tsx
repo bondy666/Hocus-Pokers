@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { leaderboard, gbp, winRate } from "../data.ts";
 import { useClub } from "../ClubContext.ts";
 
@@ -9,7 +10,7 @@ export default function Leaderboard() {
     <section className="section felt" id="leaderboard">
       <div className="section-inner">
         <h2 className="section-title">Career Leaderboard</h2>
-        <p className="section-sub">Net profit &amp; loss across every tracked tournament.</p>
+        <p className="section-sub">Ranked by tournament wins across every tracked game.</p>
 
         <div className="table-wrap">
           <table className="board">
@@ -17,10 +18,10 @@ export default function Leaderboard() {
               <tr>
                 <th className="col-rank">#</th>
                 <th>Player</th>
-                <th className="num">Net P&amp;L</th>
                 <th className="num">Wins</th>
                 <th className="num">Games</th>
                 <th className="num">Win rate</th>
+                <th className="num">Net P&amp;L</th>
               </tr>
             </thead>
             <tbody>
@@ -30,15 +31,17 @@ export default function Leaderboard() {
                     {i === 0 ? "♛" : i + 1}
                   </td>
                   <td>
-                    <span className="player-name">{m.name}</span>
-                    <span className="player-nick">“{m.nickname}”</span>
-                  </td>
-                  <td className={`num ${m.netPnl >= 0 ? "pos" : "neg"}`}>
-                    {gbp(m.netPnl)}
+                    <Link className="player-link" to={`/player/${m.id}`}>
+                      <span className="player-name">{m.name}</span>
+                      {m.nickname && <span className="player-nick">“{m.nickname}”</span>}
+                    </Link>
                   </td>
                   <td className="num">{m.wins}</td>
                   <td className="num">{m.games}</td>
                   <td className="num">{winRate(m)}%</td>
+                  <td className={`num ${m.netPnl >= 0 ? "pos" : "neg"}`}>
+                    {gbp(m.netPnl)}
+                  </td>
                 </tr>
               ))}
             </tbody>

@@ -496,12 +496,14 @@ a {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  font-size: 0.68rem;
+  font-size: 0.78rem;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.1em;
-  padding: 0.22rem 0.6rem;
+  letter-spacing: 0.08em;
+  padding: 0.34rem 0.85rem;
   border-radius: 999px;
+  white-space: nowrap;
+  line-height: 1.1;
 }
 
 .status-live {
@@ -2306,4 +2308,255 @@ a {
   font-size: 0.8rem;
   color: var(--cream-300);
   opacity: 0.85;
+}
+
+/* ----- clickable player names + profile ----- */
+.player-link {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px dotted transparent;
+}
+.player-link:hover {
+  border-bottom-color: var(--gold-400);
+  color: var(--gold-300);
+}
+.board .player-link:hover,
+.member-name .player-link:hover {
+  color: var(--gold-500);
+}
+.back-link {
+  display: inline-block;
+  margin-bottom: 0.6rem;
+  color: var(--gold-400);
+  text-decoration: none;
+  font-weight: 600;
+}
+.back-link:hover {
+  text-decoration: underline;
+}
+.podium-hits {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+.podium-hits li {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  background: var(--cream-100);
+  border-radius: var(--radius);
+  padding: 0.6rem 0.9rem;
+  box-shadow: var(--shadow);
+}
+.podium-place {
+  font-weight: 700;
+  white-space: nowrap;
+}
+.podium-game {
+  flex: 1;
+  color: var(--ink-900);
+}
+.podium-date {
+  color: var(--ink-700);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+/* ----- phone notification toggle ----- */
+.notify-toggle {
+  max-width: 720px;
+  margin: 28px auto 0;
+  padding: 18px 20px;
+  border-radius: 16px;
+  background: var(--cream-100, #fbf6e9);
+  border: 1px solid var(--gold-400);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
+}
+.notify-toggle-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+.notify-toggle-icon {
+  font-size: 1.7rem;
+  line-height: 1;
+}
+.notify-toggle-head strong {
+  font-family: "Cinzel", serif;
+  color: var(--felt-800);
+  font-size: 1.05rem;
+}
+.notify-toggle-sub {
+  margin: 2px 0 0;
+  font-size: 0.85rem;
+  color: var(--ink-700, #5b5346);
+}
+.notify-toggle-note {
+  margin: 0 0 12px;
+  font-size: 0.85rem;
+  color: var(--ink-700, #5b5346);
+}
+.notify-toggle-error {
+  margin: 10px 0 0;
+  font-size: 0.82rem;
+  color: var(--red-card, #b32134);
+}
+
+/* ----- Hall of Fame ----- */
+.hof-block {
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid var(--gold-700, #9a7b2e);
+  border-radius: 14px;
+  padding: 18px 20px;
+  margin: 18px 0;
+}
+.hof-title {
+  font-family: "Cinzel", serif;
+  color: var(--gold-300, #e9c96a);
+  margin: 0 0 4px;
+  font-size: 1.15rem;
+}
+.hof-note {
+  margin: 0 0 12px;
+  font-size: 0.82rem;
+  color: var(--cream-300, #d8cfb8);
+  opacity: 0.85;
+}
+.hof-empty {
+  font-size: 0.85rem;
+  color: var(--cream-300, #d8cfb8);
+  opacity: 0.7;
+  font-style: italic;
+}
+.hof-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+.hof-grid .hof-block {
+  margin: 0;
+}
+.hof-wide {
+  grid-column: 1 / -1;
+}
+@media (max-width: 720px) {
+  .hof-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.hof-podium {
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.hof-podium-card {
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--gold-700, #9a7b2e);
+  border-radius: 12px;
+  padding: 16px 22px;
+  text-align: center;
+  min-width: 130px;
+}
+.hof-podium-card.place-1 {
+  border-color: var(--gold-300, #e9c96a);
+  box-shadow: 0 0 18px rgba(233, 201, 106, 0.35);
+  transform: translateY(-6px);
+}
+.hof-podium-medal {
+  font-size: 1.8rem;
+}
+.hof-podium-name {
+  font-family: "Cinzel", serif;
+  color: var(--cream-100, #fbf6e9);
+  margin: 4px 0;
+}
+.hof-podium-wins {
+  color: var(--gold-300, #e9c96a);
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+.hof-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.hof-table th {
+  text-align: left;
+  color: var(--gold-300, #e9c96a);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 4px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+.hof-table td {
+  padding: 6px 8px;
+  color: var(--cream-100, #fbf6e9);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.hof-table td.num,
+.hof-table th.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.hof-rank {
+  color: var(--gold-300, #e9c96a);
+  width: 2rem;
+}
+.hof-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.hof-timeline-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  flex-wrap: wrap;
+}
+.hof-timeline-date {
+  color: var(--cream-300, #d8cfb8);
+  font-size: 0.8rem;
+  min-width: 110px;
+  font-variant-numeric: tabular-nums;
+}
+.hof-timeline-winner {
+  color: var(--cream-100, #fbf6e9);
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.hof-timeline-host {
+  color: var(--cream-300, #d8cfb8);
+  font-size: 0.82rem;
+  margin-left: auto;
+}
+.hof-tbd {
+  color: var(--cream-300, #d8cfb8);
+  font-style: italic;
+  opacity: 0.7;
+}
+.hof-badge {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-weight: 700;
+}
+.hof-badge.defended {
+  background: var(--gold-300, #e9c96a);
+  color: #1b1505;
+}
+.hof-badge.first {
+  background: rgba(255, 255, 255, 0.15);
+  color: var(--cream-100, #fbf6e9);
 }

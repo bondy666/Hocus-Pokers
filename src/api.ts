@@ -107,6 +107,7 @@ export interface NewTournament {
   prizePool: number;
   status: "live" | "upcoming" | "complete";
   winnerId?: string;
+  hostId?: string;
 }
 
 export const createTournament = (body: NewTournament) =>
@@ -208,11 +209,23 @@ export interface PlayerStat {
   net: number;
   games: number;
   wins: number;
+  firsts: number;
+  seconds: number;
+  thirds: number;
   totalBuyIn: number;
   totalCashOut: number;
   bestFinish: number | null;
   itm: number; // in-the-money finishes
   avgFinish: number | null;
+}
+
+export interface PodiumGame {
+  id: string;
+  name: string;
+  date: string;
+  first: string | null;
+  second: string | null;
+  third: string | null;
 }
 
 export interface YearStanding {
@@ -234,6 +247,7 @@ export interface TimelineSeries {
 export interface ClubStats {
   players: PlayerStat[];
   yearly: YearStanding[];
+  podium: PodiumGame[];
   timeline: {
     tournaments: { id: string; name: string; date: string }[];
     series: TimelineSeries[];
@@ -375,3 +389,18 @@ export async function loadClubData(): Promise<ClubData> {
     return { members: seedMembers, tournaments: seedTournaments, source: "seed" };
   }
 }
+
+// ----- web push notifications -----
+
+export interface PushConfig {
+  key: string;
+  enabled: boolean;
+}
+
+export const getPushConfig = () => getJson<PushConfig>("/api/push/public-key");
+
+export const savePushSubscription = (subscription: PushSubscriptionJSON) =>
+  postJson<{ ok: boolean }>("/api/push/subscribe", { subscription });
+
+export const removePushSubscription = (endpoint: string) =>
+  postJson<{ ok: boolean }>("/api/push/unsubscribe", { endpoint });

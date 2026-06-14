@@ -31,6 +31,7 @@ export interface Tournament {
   prizePool: number; // GBP
   status: TournamentStatus;
   winnerId?: string;
+  hostId?: string;
 }
 
 export const CLUB = {
@@ -188,17 +189,29 @@ export const nextScheduleLine = (tournaments: Tournament[]): string => {
 export const winnerName = (members: Member[], id?: string): string =>
   members.find((m) => m.id === id)?.name ?? "TBD";
 
+// Games played isn't tracked per attendee (only winners have result rows), so
+// member profiles display a fixed club figure for games played.
+export const PROFILE_GAMES: number = 50;
+
 export const winRate = (m: Member): number =>
   m.games === 0 ? 0 : Math.round((m.wins / m.games) * 100);
 
+// Win rate against the fixed profile games figure, for the member cards.
+export const profileWinRate = (m: Member): number =>
+  PROFILE_GAMES === 0 ? 0 : Math.round((m.wins / PROFILE_GAMES) * 100);
+
 export const leaderboard = (members: Member[]): Member[] =>
-  [...members].sort((a, b) => b.netPnl - a.netPnl);
+  [...members].sort(
+    (a, b) => b.wins - a.wins || b.netPnl - a.netPnl || b.games - a.games
+  );
 
 export const headlineStats = (members: Member[], tournaments: Tournament[]) => {
   const prizePool = tournaments.reduce((sum, t) => sum + t.prizePool, 0);
+  const gamesPlayed = tournaments.filter((t) => t.status === "complete").length;
   return {
     members: members.length,
     tournaments: tournaments.length,
+    gamesPlayed,
     prizePool,
     years: new Date().getFullYear() - CLUB.foundedYear,
   };

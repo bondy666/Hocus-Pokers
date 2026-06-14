@@ -357,6 +357,20 @@ function AddForms({
               />
             </label>
           </div>
+          <label>
+            Host
+            <select
+              value={tournament.hostId ?? ""}
+              onChange={(e) => setTournament({ ...tournament, hostId: e.target.value || undefined })}
+            >
+              <option value="">— none —</option>
+              {members.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name}
+                </option>
+              ))}
+            </select>
+          </label>
           <button type="submit">Create tournament</button>
           <NoteLine note={tournamentForm.note} />
         </form>
@@ -739,6 +753,7 @@ function TournamentRow({
     prizePool: tournament.prizePool,
     status: tournament.status,
     winnerId: tournament.winnerId,
+    hostId: tournament.hostId,
   });
   const { note, err, clear } = useFormNote();
   const [busy, setBusy] = useState(false);
@@ -844,6 +859,20 @@ function TournamentRow({
               ))}
             </select>
           </label>
+          <label>
+            Host
+            <select
+              value={form.hostId ?? ""}
+              onChange={(e) => setForm({ ...form, hostId: e.target.value || undefined })}
+            >
+              <option value="">— none —</option>
+              {members.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
         <div className="manage-actions">
           <button className="btn-save" onClick={save} disabled={busy}>
@@ -867,6 +896,7 @@ function TournamentRow({
         <div className="manage-meta">
           {tournament.date} · {tournament.venue} · {tournament.players} players · £{tournament.prizePool}
           {tournament.winnerId && <> · 🏆 {memberName(tournament.winnerId) ?? "—"}</>}
+          {tournament.hostId && <> · 🏠 {memberName(tournament.hostId) ?? "—"}</>}
         </div>
         <div className="manage-actions">
           <button className="btn-ghost" onClick={() => setShowResults((s) => !s)} disabled={busy}>

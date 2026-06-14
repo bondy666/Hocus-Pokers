@@ -7,7 +7,7 @@ export default function Hero() {
   const stats = headlineStats(members, tournaments);
   const cards = [
     { value: String(stats.members), label: "Members" },
-    { value: String(stats.tournaments), label: "Tournaments" },
+    { value: String(stats.gamesPlayed), label: "Games played" },
     { value: gbp(stats.prizePool), label: "Prize pool tracked" },
     { value: String(stats.years), label: "Years running" },
   ];

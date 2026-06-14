@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useClub } from "../ClubContext.ts";
 import {
   getPlanning,
@@ -25,6 +26,7 @@ const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 export default function PlanNight() {
   const { user, authChecked, refresh, source } = useClub();
+  const navigate = useNavigate();
   const canWrite = user?.canWrite !== false && !!user;
 
   const [dates, setDates] = useState<PlanningDate[]>([]);
@@ -241,6 +243,8 @@ export default function PlanNight() {
                       await setupFromDate(d.id, { name, venue });
                       await load();
                       await refresh();
+                      // Tournament created — jump to Tournaments to fill in details.
+                      navigate("/tournaments");
                     } catch (e: any) {
                       setErr(e.message || "Couldn't set up the tournament.");
                     } finally {
@@ -285,7 +289,7 @@ function PlanDateCard({ d, isLeader, canWrite, busy, onVote, onRemove, onSetup }
           onClick={onVote}
           disabled={busy}
         >
-          {d.votedByMe ? "✓ Going" : "Vote"}
+          {d.votedByMe ? "✓ Available" : "Vote"}
           <span className="vote-count">{d.voteCount}</span>
         </button>
       </div>

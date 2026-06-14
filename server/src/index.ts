@@ -5,6 +5,7 @@ import path from "path";
 import fs from "fs";
 import crypto from "crypto";
 import multer from "multer";
+import webpush from "web-push";
 import { getPool, sql, sqlConfigured } from "./db/sql";
 import {
   parseEmailList,
@@ -127,6 +128,10 @@ function ensureTournamentsSchema(): Promise<void> {
         IF COL_LENGTH('dbo.tournaments', 'address') IS NULL
           ALTER TABLE dbo.tournaments ADD address NVARCHAR(260) NULL;
       `);
+      await pool.request().query(`
+        IF COL_LENGTH('dbo.tournaments', 'host_id') IS NULL
+          ALTER TABLE dbo.tournaments ADD host_id INT NULL;
+      `);
     })().catch((err) => {
       tournamentsReady = null;
       throw err;
@@ -192,7 +197,7 @@ async function loadTournaments(): Promise<TournamentDto[]> {
   await ensureTournamentsSchema();
   const pool = await getPool();
   const result = await pool.request().query(`
-    SELECT id, name, played_on, venue, address, players, prize_pool, status, winner_id
+    SELECT id, name, played_on, venue, address, players, prize_pool, status, winner_id, host_id
     FROM dbo.tournaments
     ORDER BY played_on DESC
   `);
@@ -207,6 +212,7 @@ async function loadTournaments(): Promise<TournamentDto[]> {
     prizePool: Number(r.prize_pool ?? 0),
     status: r.status,
     winnerId: r.winner_id != null ? String(r.winner_id) : undefined,
+    hostId: r.host_id != null ? String(r.host_id) : undefined,
   }));
 }
 
@@ -235,7 +241,11 @@ app.get("/api/leaderboard", async (_req, res) => {
       return;
     }
     const members = await loadMembers();
-    res.json([...members].sort((a, b) => b.netPnl - a.netPnl));
+    res.json(
+      [...members].sort(
+        (a, b) => b.wins - a.wins || b.netPnl - a.netPnl || b.games - a.games
+      )
+    );
   } catch (err: any) {
     res.status(500).json({ error: "Failed to load leaderboard", details: err.message });
   }
@@ -356,7 +366,7 @@ app.post("/api/tournaments", async (req, res) => {
   if (!requireUser(req, res)) return;
   if (!requireDb(res)) return;
   try {
-    const { name, date, venue, address, players, buyIn, prizePool, status, winnerId } = req.body ?? {};
+    const { name, date, venue, address, players, buyIn, prizePool, status, winnerId, hostId } = req.body ?? {};
     if (!name || !date || !venue) {
       return res.status(400).json({ error: "name, date and venue are required" });
     }
@@ -375,12 +385,24 @@ app.post("/api/tournaments", async (req, res) => {
       .input("PrizePool", sql.Decimal(10, 2), Number(prizePool) || 0)
       .input("Status", sql.NVarChar(20), safeStatus)
       .input("WinnerId", sql.Int, winnerId != null && winnerId !== "" ? Number(winnerId) : null)
+      .input("HostId", sql.Int, hostId != null && hostId !== "" ? Number(hostId) : null)
       .query(`
-        INSERT INTO dbo.tournaments (name, played_on, venue, address, players, buy_in, prize_pool, status, winner_id)
+        INSERT INTO dbo.tournaments (name, played_on, venue, address, players, buy_in, prize_pool, status, winner_id, host_id)
         OUTPUT INSERTED.*
-        VALUES (@Name, @PlayedOn, @Venue, @Address, @Players, @BuyIn, @PrizePool, @Status, @WinnerId)
+        VALUES (@Name, @PlayedOn, @Venue, @Address, @Players, @BuyIn, @PrizePool, @Status, @WinnerId, @HostId)
       `);
     res.status(201).json(result.recordset[0]);
+    const created = result.recordset[0];
+    void sendPush({
+      title: "🃏 New tournament added",
+      body: `${created.name} · ${created.venue}${
+        created.played_on
+          ? " · " + new Date(created.played_on).toLocaleDateString("en-GB")
+          : ""
+      }`,
+      url: "/tournaments",
+      tag: "tournament",
+    });
   } catch (err: any) {
     res.status(500).json({ error: "Failed to create tournament", details: err.message });
   }
@@ -643,7 +665,7 @@ app.put("/api/tournaments/:id", async (req, res) => {
   if (!requireDb(res)) return;
   try {
     const id = Number(req.params.id);
-    const { name, date, venue, address, players, buyIn, prizePool, status, winnerId } = req.body ?? {};
+    const { name, date, venue, address, players, buyIn, prizePool, status, winnerId, hostId } = req.body ?? {};
     if (!Number.isFinite(id) || !name || !date || !venue) {
       return res.status(400).json({ error: "valid id, name, date and venue are required" });
     }
@@ -663,10 +685,11 @@ app.put("/api/tournaments/:id", async (req, res) => {
       .input("PrizePool", sql.Decimal(10, 2), Number(prizePool) || 0)
       .input("Status", sql.NVarChar(20), safeStatus)
       .input("WinnerId", sql.Int, winnerId != null && winnerId !== "" ? Number(winnerId) : null)
+      .input("HostId", sql.Int, hostId != null && hostId !== "" ? Number(hostId) : null)
       .query(`
         UPDATE dbo.tournaments
         SET name = @Name, played_on = @PlayedOn, venue = @Venue, address = @Address, players = @Players,
-            buy_in = @BuyIn, prize_pool = @PrizePool, status = @Status, winner_id = @WinnerId
+            buy_in = @BuyIn, prize_pool = @PrizePool, status = @Status, winner_id = @WinnerId, host_id = @HostId
         OUTPUT INSERTED.*
         WHERE id = @Id
       `);
@@ -1072,6 +1095,13 @@ app.post("/api/banter", async (req, res) => {
         VALUES (@Email, @Name, @Body)
       `);
     res.status(201).json(banterDto(result.recordset[0], principal.email.toLowerCase()));
+    const author = principal.name || principal.email.split("@")[0] || "A member";
+    void sendPush({
+      title: "💬 New banter at Hocus Pokers",
+      body: `${author}: ${body.length > 120 ? body.slice(0, 117) + "…" : body}`,
+      url: "/cardroom",
+      tag: "banter",
+    });
   } catch (err: any) {
     res.status(500).json({ error: "Failed to post message", details: err.message });
   }
@@ -1330,7 +1360,7 @@ app.post("/api/planning/dates/:id/setup", async (req, res) => {
       .request()
       .input("Name", sql.NVarChar(160), name)
       .input("PlayedOn", sql.Date, playedOn)
-      .input("Venue", sql.NVarChar(160), venue || "The Card Room, Horsham")
+      .input("Venue", sql.NVarChar(160), venue || "The Card Room, Ealing")
       .input("Players", sql.Int, players)
       .query(`
         INSERT INTO dbo.tournaments (name, played_on, venue, players, buy_in, prize_pool, status)
@@ -1377,6 +1407,9 @@ function buildStats(rows: ResultJoinRow[]) {
         net: 0,
         games: 0,
         wins: 0,
+        firsts: 0,
+        seconds: 0,
+        thirds: 0,
         totalBuyIn: 0,
         totalCashOut: 0,
         bestFinish: null as number | null,
@@ -1388,7 +1421,14 @@ function buildStats(rows: ResultJoinRow[]) {
     }
     p.net += Number(r.net);
     p.games += 1;
-    if (Number(r.finish_place) === 1) p.wins += 1;
+    if (Number(r.finish_place) === 1) {
+      p.wins += 1;
+      p.firsts += 1;
+    } else if (Number(r.finish_place) === 2) {
+      p.seconds += 1;
+    } else if (Number(r.finish_place) === 3) {
+      p.thirds += 1;
+    }
     p.totalBuyIn += Number(r.buy_in_total);
     p.totalCashOut += Number(r.cash_out);
     if (Number(r.cash_out) > 0) p.itm += 1;
@@ -1405,6 +1445,9 @@ function buildStats(rows: ResultJoinRow[]) {
     net: p.net,
     games: p.games,
     wins: p.wins,
+    firsts: p.firsts,
+    seconds: p.seconds,
+    thirds: p.thirds,
     totalBuyIn: p.totalBuyIn,
     totalCashOut: p.totalCashOut,
     bestFinish: p.bestFinish,
@@ -1479,9 +1522,40 @@ function buildStats(rows: ResultJoinRow[]) {
     }
   }
 
+  // Podium per tournament: the 1st / 2nd / 3rd place finishers (each optional).
+  const podiumByT = new Map<
+    number,
+    { id: number; name: string; date: string; first?: string; second?: string; third?: string }
+  >();
+  for (const r of rows) {
+    let row = podiumByT.get(r.tournament_id);
+    if (!row) {
+      row = {
+        id: r.tournament_id,
+        name: r.t_name,
+        date: new Date(r.played_on).toISOString().slice(0, 10),
+      };
+      podiumByT.set(r.tournament_id, row);
+    }
+    if (Number(r.finish_place) === 1) row.first = r.user_name;
+    else if (Number(r.finish_place) === 2) row.second = r.user_name;
+    else if (Number(r.finish_place) === 3) row.third = r.user_name;
+  }
+  const podium = [...podiumByT.values()]
+    .sort((a, b) => (a.date > b.date ? -1 : a.date < b.date ? 1 : b.id - a.id))
+    .map((p) => ({
+      id: String(p.id),
+      name: p.name,
+      date: p.date,
+      first: p.first ?? null,
+      second: p.second ?? null,
+      third: p.third ?? null,
+    }));
+
   return {
     players,
     yearly,
+    podium,
     timeline: {
       tournaments: tournamentOrder.map((t) => ({ id: String(t.id), name: t.name, date: t.date })),
       series,
@@ -1534,6 +1608,9 @@ function seedStats() {
       net: m.netPnl,
       games: m.games,
       wins: m.wins,
+      firsts: m.wins,
+      seconds: 0,
+      thirds: 0,
       totalBuyIn,
       totalCashOut: totalBuyIn + m.netPnl,
       bestFinish: m.wins > 0 ? 1 : null,
@@ -1573,9 +1650,25 @@ function seedStats() {
   const totalCashOut = players.reduce((s, p) => s + p.totalCashOut, 0);
   const best = [...seedMembers].sort((a, b) => b.netPnl - a.netPnl)[0];
 
+  const podium = completed
+    .slice()
+    .sort((a, b) => (a.date > b.date ? -1 : 1))
+    .map((t) => {
+      const w = seedMembers.find((m) => m.id === t.winnerId);
+      return {
+        id: t.id,
+        name: t.name,
+        date: t.date,
+        first: w ? w.name : null,
+        second: null,
+        third: null,
+      };
+    });
+
   return {
     players,
     yearly,
+    podium,
     timeline: {
       tournaments: completed.map((t) => ({ id: t.id, name: t.name, date: t.date })),
       series,
@@ -1590,11 +1683,163 @@ function seedStats() {
   };
 }
 
+// ----- web push notifications -----
+//
+// Members can opt in to phone notifications (PWA Web Push). We persist each
+// device's push subscription in a lazily-created table and fan out a payload
+// whenever there's new banter or a new tournament. VAPID keys come from env;
+// if unset, push is disabled gracefully (endpoints still respond).
+
+const vapidPublicKey = process.env.VAPID_PUBLIC_KEY || "";
+const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY || "";
+const vapidSubject = process.env.VAPID_SUBJECT || "mailto:club@hocuspokers.local";
+const pushEnabled = Boolean(vapidPublicKey && vapidPrivateKey);
+
+if (pushEnabled) {
+  try {
+    webpush.setVapidDetails(vapidSubject, vapidPublicKey, vapidPrivateKey);
+  } catch (err) {
+    console.error("Invalid VAPID configuration; push disabled", err);
+  }
+}
+
+let pushReady: Promise<void> | null = null;
+
+function ensurePushSchema(): Promise<void> {
+  if (!pushReady) {
+    pushReady = (async () => {
+      const pool = await getPool();
+      await pool.request().query(`
+        IF OBJECT_ID('dbo.push_subscriptions', 'U') IS NULL
+        CREATE TABLE dbo.push_subscriptions (
+          id          INT IDENTITY(1,1) PRIMARY KEY,
+          endpoint    NVARCHAR(500) NOT NULL,
+          p256dh      NVARCHAR(300) NOT NULL,
+          auth        NVARCHAR(300) NOT NULL,
+          email       NVARCHAR(160) NULL,
+          created_at  DATETIME2     NOT NULL DEFAULT SYSUTCDATETIME(),
+          CONSTRAINT UQ_push_subscriptions_endpoint UNIQUE (endpoint)
+        );
+      `);
+    })().catch((err) => {
+      pushReady = null;
+      throw err;
+    });
+  }
+  return pushReady;
+}
+
+// Fan a notification out to every stored subscription. Best-effort: stale
+// endpoints (404/410) are pruned. Never throws to its caller.
+async function sendPush(payload: {
+  title: string;
+  body: string;
+  url?: string;
+  tag?: string;
+}): Promise<void> {
+  if (!pushEnabled || !usingDb) return;
+  try {
+    await ensurePushSchema();
+    const pool = await getPool();
+    const subs = await pool
+      .request()
+      .query(`SELECT id, endpoint, p256dh, auth FROM dbo.push_subscriptions`);
+    if (subs.recordset.length === 0) return;
+    const data = JSON.stringify({
+      title: payload.title,
+      body: payload.body,
+      url: payload.url || "/",
+      tag: payload.tag,
+    });
+    const stale: number[] = [];
+    await Promise.all(
+      subs.recordset.map(async (row: any) => {
+        const subscription = {
+          endpoint: row.endpoint,
+          keys: { p256dh: row.p256dh, auth: row.auth },
+        };
+        try {
+          await webpush.sendNotification(subscription, data);
+        } catch (err: any) {
+          const code = err?.statusCode;
+          if (code === 404 || code === 410) stale.push(row.id);
+        }
+      })
+    );
+    if (stale.length > 0) {
+      await pool
+        .request()
+        .query(`DELETE FROM dbo.push_subscriptions WHERE id IN (${stale.join(",")})`);
+    }
+  } catch (err) {
+    console.error("sendPush failed", err);
+  }
+}
+
+// Expose the VAPID public key so the browser can build a subscription.
+app.get("/api/push/public-key", (_req, res) => {
+  res.json({ key: pushEnabled ? vapidPublicKey : "", enabled: pushEnabled });
+});
+
+// Store (or refresh) a device's push subscription. Any visitor may subscribe.
+app.post("/api/push/subscribe", async (req, res) => {
+  if (!pushEnabled) return res.status(503).json({ error: "Push is not configured" });
+  if (!requireDb(res)) return;
+  try {
+    const sub = req.body?.subscription ?? req.body;
+    const endpoint = String(sub?.endpoint ?? "");
+    const p256dh = String(sub?.keys?.p256dh ?? "");
+    const auth = String(sub?.keys?.auth ?? "");
+    if (!endpoint || !p256dh || !auth) {
+      return res.status(400).json({ error: "A valid push subscription is required" });
+    }
+    const email = getPrincipal(req)?.email?.toLowerCase() ?? null;
+    await ensurePushSchema();
+    const pool = await getPool();
+    await pool
+      .request()
+      .input("Endpoint", sql.NVarChar(500), endpoint)
+      .input("P256dh", sql.NVarChar(300), p256dh)
+      .input("Auth", sql.NVarChar(300), auth)
+      .input("Email", sql.NVarChar(160), email)
+      .query(`
+        MERGE dbo.push_subscriptions AS target
+        USING (SELECT @Endpoint AS endpoint) AS src
+          ON target.endpoint = src.endpoint
+        WHEN MATCHED THEN
+          UPDATE SET p256dh = @P256dh, auth = @Auth, email = @Email
+        WHEN NOT MATCHED THEN
+          INSERT (endpoint, p256dh, auth, email)
+          VALUES (@Endpoint, @P256dh, @Auth, @Email);
+      `);
+    res.status(201).json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to save subscription", details: err.message });
+  }
+});
+
+// Remove a device's subscription (when the user turns notifications off).
+app.post("/api/push/unsubscribe", async (req, res) => {
+  if (!requireDb(res)) return;
+  try {
+    const endpoint = String(req.body?.endpoint ?? req.body?.subscription?.endpoint ?? "");
+    if (!endpoint) return res.status(400).json({ error: "endpoint is required" });
+    await ensurePushSchema();
+    const pool = await getPool();
+    await pool
+      .request()
+      .input("Endpoint", sql.NVarChar(500), endpoint)
+      .query(`DELETE FROM dbo.push_subscriptions WHERE endpoint = @Endpoint`);
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to remove subscription", details: err.message });
+  }
+});
+
 // SPA fallback for client-side routes.
 app.get(/^(?!\/api).*/, (_req, res) => {
   res.sendFile(path.join(clientDistPath, "index.html"));
 });
-
 const port = process.env.PORT || 3000;
 
 // Touch the sql import so the type is retained even without a DB configured.

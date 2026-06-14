@@ -1,0 +1,7 @@
+1. On plan the next night, clicking 'vote' should change it to 'available' rather than 'going' as the tourney isn't set up yet.
+2. When you select 'create tournament' it should take you to the tournaments page so you can make the necessary updates.
+3. The 'status' button on the tournament is too small for the text.
+4. On any page where it shows a member, you should be able to click on the name to give you all the stats for that member. I would like to see line graphs, a bar chart reflecting stack (red if negative, black if positive). the Y column should go up to £10000 and the X should be the timeline)
+5. The Club stats should show the bar chart for everyone on X axis and their stack in red/black on the Y
+6. There needs to be a trophy stat per user
+7. Stats should show first/second/third game winners. Games should all reflect 1st/2nd/3rd. Sometimes there won't be a third place though, esp if there are fewer players.

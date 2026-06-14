@@ -12,9 +12,11 @@ import {
 import Hero from "./sections/Hero.tsx";
 import Leaderboard from "./sections/Leaderboard.tsx";
 import Members from "./sections/Members.tsx";
+import PlayerProfile from "./sections/PlayerProfile.tsx";
 import Tournaments from "./sections/Tournaments.tsx";
 import PlanNight from "./sections/PlanNight.tsx";
 import Statistics from "./sections/Statistics.tsx";
+import HallOfFame from "./sections/HallOfFame.tsx";
 import CardRoom from "./sections/CardRoom.tsx";
 import HouseRules from "./sections/HouseRules.tsx";
 import Admin from "./sections/Admin.tsx";
@@ -29,6 +31,7 @@ const nav = [
   { to: "/tournaments", label: "Tournaments" },
   { to: "/plan", label: "Plan Night" },
   { to: "/stats", label: "Club Stats" },
+  { to: "/halloffame", label: "Hall of Fame" },
   { to: "/cardroom", label: "Card Room" },
   { to: "/rules", label: "House Rules" },
   { to: "/admin", label: "Score Keeper" },
@@ -144,9 +147,11 @@ export default function App() {
             <Route index element={<Hero />} />
             <Route path="leaderboard" element={<Leaderboard />} />
             <Route path="members" element={<Members />} />
+            <Route path="player/:id" element={<PlayerProfile />} />
             <Route path="tournaments" element={<Tournaments />} />
             <Route path="plan" element={<PlanNight />} />
             <Route path="stats" element={<Statistics />} />
+            <Route path="halloffame" element={<HallOfFame />} />
             <Route path="cardroom" element={<CardRoom />} />
             <Route path="rules" element={<HouseRules />} />
             <Route path="admin" element={<Admin />} />

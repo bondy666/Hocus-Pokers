@@ -1,0 +1,24 @@
+{
+  "name": "Hocus Pokers — Ealing Poker Club",
+  "short_name": "Hocus Pokers",
+  "description": "Live tournament stats tracker for the Hocus Pokers poker club.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b5d3b",
+  "theme_color": "#0b5d3b",
+  "icons": [
+    {
+      "src": "/hocus_pokers_192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/hocus_pokers_512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

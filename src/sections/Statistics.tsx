@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { useClub } from "../ClubContext.ts";
 import { gbp, type Member, type Tournament } from "../data.ts";
 import { getStats, type ClubStats } from "../api.ts";
 import LineChart from "../components/LineChart.tsx";
+import BarChart, { type BarDatum } from "../components/BarChart.tsx";
 
 // Build an approximate ClubStats from bundled context data. Only used when the
 // /api/stats endpoint is unavailable (e.g. seed mode with the API down) so the
@@ -21,6 +23,9 @@ function buildFallback(members: Member[], tournaments: Tournament[]): ClubStats 
       net: m.netPnl,
       games: m.games,
       wins: m.wins,
+      firsts: m.wins,
+      seconds: 0,
+      thirds: 0,
       totalBuyIn,
       totalCashOut: totalBuyIn + m.netPnl,
       bestFinish: m.wins > 0 ? 1 : null,
@@ -60,6 +65,21 @@ function buildFallback(members: Member[], tournaments: Tournament[]): ClubStats 
         .sort((a, b) => b.net - a.net),
     }));
 
+  const podium = completed
+    .slice()
+    .sort((a, b) => (a.date > b.date ? -1 : 1))
+    .map((t) => {
+      const w = members.find((m) => m.id === t.winnerId);
+      return {
+        id: t.id,
+        name: t.name,
+        date: t.date,
+        first: w ? w.name : null,
+        second: null,
+        third: null,
+      };
+    });
+
   const totalBuyIn = players.reduce((s, p) => s + p.totalBuyIn, 0);
   const totalCashOut = players.reduce((s, p) => s + p.totalCashOut, 0);
   const best = [...members].sort((a, b) => b.netPnl - a.netPnl)[0];
@@ -67,6 +87,7 @@ function buildFallback(members: Member[], tournaments: Tournament[]): ClubStats 
   return {
     players,
     yearly,
+    podium,
     timeline: {
       tournaments: completed.map((t) => ({ id: t.id, name: t.name, date: t.date })),
       series,
@@ -121,6 +142,19 @@ export default function Statistics() {
     [stats]
   );
 
+  // Trophy counts keyed by player id (members carry the trophy list).
+  const trophyCount = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const m of members) map.set(m.id, m.trophies.length);
+    return map;
+  }, [members]);
+
+  // Club bar chart: every player's career stack, red (loss) / black (profit).
+  const clubBars: BarDatum[] = useMemo(
+    () => rankedPlayers.map((p) => ({ id: p.id, label: p.name, value: p.net })),
+    [rankedPlayers]
+  );
+
   return (
     <section className="section" id="stats">
       <div className="section-inner">
@@ -153,6 +187,18 @@ export default function Statistics() {
             </div>
 
             <div className="stats-block">
+              <h3 className="stats-heading">Career stacks</h3>
+              <p className="stats-note">
+                Each player's career net. Black bars are in profit, red bars are down.
+              </p>
+              {clubBars.length > 0 ? (
+                <BarChart items={clubBars} yMax={10000} />
+              ) : (
+                <p className="stats-note">No player results yet.</p>
+              )}
+            </div>
+
+            <div className="stats-block">
               <h3 className="stats-heading">Win / loss over time</h3>
               <p className="stats-note">
                 Cumulative net P&amp;L per player. Tap a name to show or hide their line.
@@ -175,23 +221,31 @@ export default function Statistics() {
                       <th className="num">Buy-ins</th>
                       <th className="num">Cashed out</th>
                       <th className="num">Games</th>
-                      <th className="num">Wins</th>
+                      <th className="num">🥇</th>
+                      <th className="num">🥈</th>
+                      <th className="num">🥉</th>
+                      <th className="num">🏆</th>
                       <th className="num">ITM</th>
-                      <th className="num">Best</th>
                       <th className="num">Avg finish</th>
                     </tr>
                   </thead>
                   <tbody>
                     {rankedPlayers.map((p) => (
                       <tr key={p.id}>
-                        <td>{p.name}</td>
+                        <td>
+                          <Link className="player-link" to={`/player/${p.id}`}>
+                            {p.name}
+                          </Link>
+                        </td>
                         <td className={`num ${pnlClass(p.net)}`}>{gbp(p.net)}</td>
                         <td className="num">{gbp(p.totalBuyIn)}</td>
                         <td className="num">{gbp(p.totalCashOut)}</td>
                         <td className="num">{p.games}</td>
-                        <td className="num">{p.wins}</td>
+                        <td className="num">{p.firsts}</td>
+                        <td className="num">{p.seconds}</td>
+                        <td className="num">{p.thirds}</td>
+                        <td className="num">{trophyCount.get(p.id) ?? 0}</td>
                         <td className="num">{p.itm}</td>
-                        <td className="num">{p.bestFinish ?? "—"}</td>
                         <td className="num">
                           {p.avgFinish != null ? p.avgFinish.toFixed(1) : "—"}
                         </td>
@@ -220,6 +274,43 @@ export default function Statistics() {
                       </ol>
                     </div>
                   ))}
+                </div>
+              </div>
+            )}
+
+            {stats.podium.length > 0 && (
+              <div className="stats-block">
+                <h3 className="stats-heading">Podium by game</h3>
+                <p className="stats-note">First, second and third place from each completed game.</p>
+                <div className="table-wrap">
+                  <table className="stats-table">
+                    <thead>
+                      <tr>
+                        <th>Game</th>
+                        <th>Date</th>
+                        <th>🥇 1st</th>
+                        <th>🥈 2nd</th>
+                        <th>🥉 3rd</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {stats.podium.map((g) => (
+                        <tr key={g.id}>
+                          <td>{g.name}</td>
+                          <td>
+                            {new Date(g.date).toLocaleDateString("en-GB", {
+                              day: "numeric",
+                              month: "short",
+                              year: "numeric",
+                            })}
+                          </td>
+                          <td>{g.first ?? "—"}</td>
+                          <td>{g.second ?? "—"}</td>
+                          <td>{g.third ?? "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             )}
