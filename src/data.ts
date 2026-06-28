@@ -28,10 +28,12 @@ export interface Tournament {
   venue: string;
   address?: string; // full street address for the venue
   players: number;
+  buyIn?: number; // buy-in / rebuy cost per bullet (GBP)
   prizePool: number; // GBP
   status: TournamentStatus;
   winnerId?: string;
   hostId?: string;
+  confirmedPlayerIds?: string[]; // members confirmed to attend, shown as badges
 }
 
 export const CLUB = {
@@ -120,7 +122,7 @@ export const tournaments: Tournament[] = [
 export const houseRules: { title: string; body: string }[] = [
   {
     title: "One player per hand",
-    body: "No table talk on a live hand. Coaching, soft-play and 'helpful' advice will earn you a friendly fine to the snack fund.",
+    body: "No table talk on a live hand. Coaching, soft-play and 'helpful' advice is frowned upon.",
   },
   {
     title: "Chips stay visible",
@@ -140,7 +142,19 @@ export const houseRules: { title: string; body: string }[] = [
   },
   {
     title: "Leave it on the felt",
-    body: "Bad beats happen. Tilt quietly, tip the dealer, and bring it back next month. We're a club, not a casino.",
+    body: "Bad beats happen. Tilt quietly. Nobody cares what hand you folded or the dream you had last night.",
+  },
+    {
+    title: "Keep your own score",
+    body: "All members are individually responsible for updating their stats. Honesty is expected — record those extra rebuys. Others can do it, but are not responsible for it.",
+  },
+  {
+    title: "Host's concessions",
+    body: "The host can choose minor rulings for the evening - in particular, 7-2 rule, and award payouts for the evening. The host's decision is final.",
+  },
+  {
+    title: "The Golden Rule - Trophy game",
+    body: "Trophy game' is the first game. For a trophy game, there must be a minimum of 6 players and all players must be pre-registered members.",
   },
 ];
 
@@ -189,16 +203,8 @@ export const nextScheduleLine = (tournaments: Tournament[]): string => {
 export const winnerName = (members: Member[], id?: string): string =>
   members.find((m) => m.id === id)?.name ?? "TBD";
 
-// Games played isn't tracked per attendee (only winners have result rows), so
-// member profiles display a fixed club figure for games played.
-export const PROFILE_GAMES: number = 50;
-
 export const winRate = (m: Member): number =>
   m.games === 0 ? 0 : Math.round((m.wins / m.games) * 100);
-
-// Win rate against the fixed profile games figure, for the member cards.
-export const profileWinRate = (m: Member): number =>
-  PROFILE_GAMES === 0 ? 0 : Math.round((m.wins / PROFILE_GAMES) * 100);
 
 export const leaderboard = (members: Member[]): Member[] =>
   [...members].sort(
@@ -207,7 +213,10 @@ export const leaderboard = (members: Member[]): Member[] =>
 
 export const headlineStats = (members: Member[], tournaments: Tournament[]) => {
   const prizePool = tournaments.reduce((sum, t) => sum + t.prizePool, 0);
-  const gamesPlayed = tournaments.filter((t) => t.status === "complete").length;
+  // Count nights, not individual games: multiple games on one date are one night.
+  const gamesPlayed = new Set(
+    tournaments.filter((t) => t.status === "complete").map((t) => t.date)
+  ).size;
   return {
     members: members.length,
     tournaments: tournaments.length,

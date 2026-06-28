@@ -4,8 +4,8 @@
   "metadata": {
     "_generator": {
       "name": "bicep",
-      "version": "0.41.2.15936",
-      "templateHash": "3960065862239736559"
+      "version": "0.44.1.10279",
+      "templateHash": "15670731660601490768"
     }
   },
   "parameters": {
@@ -92,6 +92,27 @@
         "description": "Microsoft (Entra ID) client secret."
       }
     },
+    "vapidPublicKey": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "VAPID public key for Web Push (safe to expose to browser clients)."
+      }
+    },
+    "vapidPrivateKey": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "VAPID private key for Web Push."
+      }
+    },
+    "vapidSubject": {
+      "type": "string",
+      "defaultValue": "mailto:club@hocuspokers.local",
+      "metadata": {
+        "description": "VAPID subject — a mailto: or https URL identifying the push sender."
+      }
+    },
     "microsoftTenant": {
       "type": "string",
       "defaultValue": "common",
@@ -112,7 +133,10 @@
     "webAppName": "[format('app-{0}-{1}-{2}', parameters('baseName'), parameters('environment'), variables('suffix'))]",
     "planName": "[format('plan-{0}-{1}', parameters('baseName'), parameters('environment'))]",
     "sqlServerName": "[format('sql-{0}-{1}-{2}', parameters('baseName'), parameters('environment'), variables('suffix'))]",
-    "sqlDbName": "[format('sqldb-{0}-{1}', parameters('baseName'), parameters('environment'))]"
+    "sqlDbName": "[format('sqldb-{0}-{1}', parameters('baseName'), parameters('environment'))]",
+    "keyVaultName": "[format('kv-hp-{0}', variables('suffix'))]",
+    "kvSecretsBase": "[format('https://{0}.vault.azure.net/secrets', variables('keyVaultName'))]",
+    "kvSecretsUserRoleId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')]"
   },
   "resources": [
     {
@@ -175,6 +199,9 @@
       "apiVersion": "2023-12-01",
       "name": "[variables('webAppName')]",
       "location": "[parameters('location')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
       "properties": {
         "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('planName'))]",
         "httpsOnly": true,
@@ -182,46 +209,37 @@
           "linuxFxVersion": "[format('NODE|{0}', parameters('nodeVersion'))]",
           "appCommandLine": "npm start",
           "ftpsState": "Disabled",
-          "minTlsVersion": "1.2",
-          "appSettings": [
-            {
-              "name": "NODE_ENV",
-              "value": "production"
-            },
-            {
-              "name": "PORT",
-              "value": "8080"
-            },
-            {
-              "name": "WEBSITES_PORT",
-              "value": "8080"
-            },
-            {
-              "name": "SCM_DO_BUILD_DURING_DEPLOYMENT",
-              "value": "false"
-            },
-            {
-              "name": "SQL_CONNECTION_STRING",
-              "value": "[format('Server=tcp:{0},1433;Database={1};User Id={2};Password={3};Encrypt=true;TrustServerCertificate=false;Connection Timeout=30;', reference(resourceId('Microsoft.Sql/servers', variables('sqlServerName')), '2023-08-01-preview').fullyQualifiedDomainName, variables('sqlDbName'), parameters('sqlAdminUser'), parameters('sqlAdminPassword'))]"
-            },
-            {
-              "name": "ADMIN_EMAILS",
-              "value": "[parameters('adminEmails')]"
-            },
-            {
-              "name": "GOOGLE_PROVIDER_AUTHENTICATION_SECRET",
-              "value": "[parameters('googleClientSecret')]"
-            },
-            {
-              "name": "MICROSOFT_PROVIDER_AUTHENTICATION_SECRET",
-              "value": "[parameters('microsoftClientSecret')]"
-            }
-          ]
+          "minTlsVersion": "1.2"
         }
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Web/serverfarms', variables('planName'))]",
-        "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
+        "[resourceId('Microsoft.Web/serverfarms', variables('planName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Web/sites/config",
+      "apiVersion": "2023-12-01",
+      "name": "[format('{0}/{1}', variables('webAppName'), 'appsettings')]",
+      "properties": {
+        "NODE_ENV": "production",
+        "PORT": "8080",
+        "WEBSITES_PORT": "8080",
+        "SCM_DO_BUILD_DURING_DEPLOYMENT": "false",
+        "ADMIN_EMAILS": "[parameters('adminEmails')]",
+        "VAPID_PUBLIC_KEY": "[parameters('vapidPublicKey')]",
+        "VAPID_SUBJECT": "[parameters('vapidSubject')]",
+        "SQL_CONNECTION_STRING": "[format('@Microsoft.KeyVault(SecretUri={0}/sql-connection-string/)', variables('kvSecretsBase'))]",
+        "GOOGLE_PROVIDER_AUTHENTICATION_SECRET": "[format('@Microsoft.KeyVault(SecretUri={0}/google-auth-secret/)', variables('kvSecretsBase'))]",
+        "MICROSOFT_PROVIDER_AUTHENTICATION_SECRET": "[format('@Microsoft.KeyVault(SecretUri={0}/microsoft-auth-secret/)', variables('kvSecretsBase'))]",
+        "VAPID_PRIVATE_KEY": "[format('@Microsoft.KeyVault(SecretUri={0}/vapid-private-key/)', variables('kvSecretsBase'))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults/secrets', variables('keyVaultName'), 'google-auth-secret')]",
+        "[resourceId('Microsoft.KeyVault/vaults/secrets', variables('keyVaultName'), 'microsoft-auth-secret')]",
+        "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), resourceId('Microsoft.Web/sites', variables('webAppName')), variables('kvSecretsUserRoleId')))]",
+        "[resourceId('Microsoft.KeyVault/vaults/secrets', variables('keyVaultName'), 'sql-connection-string')]",
+        "[resourceId('Microsoft.KeyVault/vaults/secrets', variables('keyVaultName'), 'vapid-private-key')]",
+        "[resourceId('Microsoft.Web/sites', variables('webAppName'))]"
       ]
     },
     {
@@ -272,6 +290,81 @@
         }
       },
       "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', variables('webAppName'))]",
+        "[resourceId('Microsoft.Web/sites/config', variables('webAppName'), 'appsettings')]"
+      ]
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults",
+      "apiVersion": "2023-07-01",
+      "name": "[variables('keyVaultName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "sku": {
+          "family": "A",
+          "name": "standard"
+        },
+        "tenantId": "[subscription().tenantId]",
+        "enableRbacAuthorization": true
+      }
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2023-07-01",
+      "name": "[format('{0}/{1}', variables('keyVaultName'), 'sql-connection-string')]",
+      "properties": {
+        "value": "[format('Server=tcp:{0},1433;Database={1};User Id={2};Password={3};Encrypt=true;TrustServerCertificate=false;Connection Timeout=30;', reference(resourceId('Microsoft.Sql/servers', variables('sqlServerName')), '2023-08-01-preview').fullyQualifiedDomainName, variables('sqlDbName'), parameters('sqlAdminUser'), parameters('sqlAdminPassword'))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
+        "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2023-07-01",
+      "name": "[format('{0}/{1}', variables('keyVaultName'), 'google-auth-secret')]",
+      "properties": {
+        "value": "[parameters('googleClientSecret')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2023-07-01",
+      "name": "[format('{0}/{1}', variables('keyVaultName'), 'microsoft-auth-secret')]",
+      "properties": {
+        "value": "[parameters('microsoftClientSecret')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2023-07-01",
+      "name": "[format('{0}/{1}', variables('keyVaultName'), 'vapid-private-key')]",
+      "properties": {
+        "value": "[parameters('vapidPrivateKey')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
+      "name": "[guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), resourceId('Microsoft.Web/sites', variables('webAppName')), variables('kvSecretsUserRoleId'))]",
+      "properties": {
+        "roleDefinitionId": "[variables('kvSecretsUserRoleId')]",
+        "principalId": "[reference(resourceId('Microsoft.Web/sites', variables('webAppName')), '2023-12-01', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
         "[resourceId('Microsoft.Web/sites', variables('webAppName'))]"
       ]
     }
@@ -292,6 +385,10 @@
     "sqlDatabaseName": {
       "type": "string",
       "value": "[variables('sqlDbName')]"
+    },
+    "keyVaultName": {
+      "type": "string",
+      "value": "[variables('keyVaultName')]"
     }
   }
 }

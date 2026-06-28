@@ -3,6 +3,7 @@ import { useParams, Link } from "react-router-dom";
 import { useClub } from "../ClubContext.ts";
 import { gbp, winRate, type Member } from "../data.ts";
 import { getStats, type ClubStats, type PlayerStat } from "../api.ts";
+import { buildHallOfFame } from "../hallOfFame.ts";
 import LineChart from "../components/LineChart.tsx";
 import BarChart, { type BarDatum } from "../components/BarChart.tsx";
 
@@ -10,7 +11,7 @@ const pnlClass = (n: number) => (n >= 0 ? "pos" : "neg");
 
 export default function PlayerProfile() {
   const { id = "" } = useParams();
-  const { members } = useClub();
+  const { members, tournaments } = useClub();
   const [stats, setStats] = useState<ClubStats | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -47,6 +48,7 @@ export default function PlayerProfile() {
     return pts.map((p, i) => ({
       id: String(i),
       label: stats?.timeline.tournaments[i]?.name ?? labels[i] ?? `#${i + 1}`,
+      axisLabel: labels[i] ?? `#${i + 1}`,
       value: p.y,
     }));
   }, [series, stats, labels]);
@@ -65,14 +67,17 @@ export default function PlayerProfile() {
     return out;
   }, [stats, member]);
 
-  // A trophy for every first-place finish (game won).
+  // A trophy for every trophy-game win. We use the Hall of Fame trophy timeline
+  // (the first game of each night that qualifies) rather than every first-place
+  // finish, so wins in second/side games don't appear as trophies.
   const winTrophies = useMemo(() => {
-    if (!stats || !member) return [] as { id: string; label: string; date: string }[];
-    return stats.podium
-      .filter((g) => g.first === member.name)
-      .map((g) => ({ id: `win-${g.id}`, label: g.name, date: g.date }))
+    if (!member) return [] as { id: string; label: string; date: string }[];
+    const hof = buildHallOfFame(members, tournaments);
+    return hof.timeline
+      .filter((t) => t.winnerId === member.id)
+      .map((t) => ({ id: `win-${t.id}`, label: t.name, date: t.date }))
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  }, [stats, member]);
+  }, [members, tournaments, member]);
 
   return (
     <section className="section" id="player">
@@ -92,10 +97,19 @@ export default function PlayerProfile() {
 
         {player && (
           <div className="stats-summary">
-            <Sum label="Net stack" value={gbp(player.net)} cls={pnlClass(player.net)} />
-            <Sum label="Games" value={String(player.games)} />
+            <Sum label="Career earnings" value={gbp(player.net)} cls={pnlClass(player.net)} />
+            <Sum label="Games" value={String(member?.games ?? player.games)} />
             <Sum label="🥇 / 🥈 / 🥉" value={`${player.firsts} / ${player.seconds} / ${player.thirds}`} />
-            <Sum label="Win rate" value={member ? `${winRate(member)}%` : `${player.wins}`} />
+            <Sum
+              label="Win rate"
+              value={
+                member
+                  ? `${winRate(member)}%`
+                  : player.games > 0
+                  ? `${Math.round((player.wins / player.games) * 100)}%`
+                  : "0%"
+              }
+            />
           </div>
         )}
 
@@ -132,7 +146,7 @@ export default function PlayerProfile() {
         )}
 
         <div className="stats-block">
-          <h3 className="stats-heading">Stack over time</h3>
+          <h3 className="stats-heading">Career earnings over time</h3>
           {stackBars.length > 0 ? (
             <BarChart items={stackBars} yMax={10000} />
           ) : (

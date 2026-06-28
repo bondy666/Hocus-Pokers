@@ -3,6 +3,7 @@
 -- tournament_results, trophies. No poker engine — stats tracking only.
 
 IF OBJECT_ID('dbo.tournament_results', 'U') IS NOT NULL DROP TABLE dbo.tournament_results;
+IF OBJECT_ID('dbo.tournament_confirmations', 'U') IS NOT NULL DROP TABLE dbo.tournament_confirmations;
 IF OBJECT_ID('dbo.tournament_photos', 'U') IS NOT NULL DROP TABLE dbo.tournament_photos;
 IF OBJECT_ID('dbo.banter', 'U') IS NOT NULL DROP TABLE dbo.banter;
 IF OBJECT_ID('dbo.trophies', 'U') IS NOT NULL DROP TABLE dbo.trophies;
@@ -55,6 +56,19 @@ CREATE TABLE dbo.tournament_results (
     cash_out       DECIMAL(10,2) NOT NULL DEFAULT 0,
     net            AS (cash_out - buy_in_total) PERSISTED,
     CONSTRAINT UQ_results UNIQUE (tournament_id, user_id)
+);
+GO
+
+-- Confirmed players for a tournament (the RSVP roster shown on each card).
+-- One row per confirmed player per tournament.
+CREATE TABLE dbo.tournament_confirmations (
+    id             INT IDENTITY(1,1) PRIMARY KEY,
+    tournament_id  INT NOT NULL
+        CONSTRAINT FK_confirmations_tournament REFERENCES dbo.tournaments(id) ON DELETE CASCADE,
+    user_id        INT NOT NULL
+        CONSTRAINT FK_confirmations_user REFERENCES dbo.users(id) ON DELETE CASCADE,
+    created_at     DATETIME2     NOT NULL DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT UQ_confirmations UNIQUE (tournament_id, user_id)
 );
 GO
 
@@ -116,7 +130,10 @@ CREATE TABLE dbo.banter (
 );
 GO
 
--- Leaderboard view: career net P&L, wins and games played per player.
+-- Leaderboard view: career net P&L, wins and games per player, counting only
+-- "trophy games" — the first game of a night (earliest tournament id for that
+-- date) that had 6+ registered (confirmed) members. Second/later games of a
+-- night never affect the leaderboard.
 CREATE OR ALTER VIEW dbo.vw_leaderboard AS
 SELECT
     u.id,
@@ -125,9 +142,63 @@ SELECT
     u.location,
     ISNULL(SUM(r.net), 0)                                AS net_pnl,
     COUNT(r.id)                                          AS games,
-    SUM(CASE WHEN r.finish_place = 1 THEN 1 ELSE 0 END)  AS wins
+    -- Wins come from the recorded winner of each trophy game so the count
+    -- includes historical games that have no per-result rows.
+    (
+        SELECT COUNT(*)
+        FROM dbo.tournaments tw
+        WHERE tw.winner_id = u.id
+          AND tw.status = 'complete'
+          AND tw.id = (
+                SELECT MIN(t2.id)
+                FROM dbo.tournaments t2
+                WHERE t2.played_on = tw.played_on
+            )
+          AND (
+                -- Registered headcount: confirmed roster if present, else the
+                -- recorded headcount. Legacy games have no recorded count (0)
+                -- and count as trophy games; a known small game (1-5) is excluded.
+                CASE
+                    WHEN EXISTS (
+                        SELECT 1 FROM dbo.tournament_confirmations c
+                        WHERE c.tournament_id = tw.id
+                    )
+                    THEN (
+                        SELECT COUNT(*) FROM dbo.tournament_confirmations c
+                        WHERE c.tournament_id = tw.id
+                    )
+                    ELSE tw.players
+                END
+            ) NOT BETWEEN 1 AND 5
+    )                                                   AS wins
 FROM dbo.users u
 LEFT JOIN dbo.tournament_results r ON r.user_id = u.id
+    AND r.tournament_id IN (
+        SELECT t.id
+        FROM dbo.tournaments t
+        WHERE t.id = (
+                SELECT MIN(t2.id)
+                FROM dbo.tournaments t2
+                WHERE t2.played_on = t.played_on
+            )
+          AND (
+                -- "Registered members" = the confirmed roster when one exists
+                -- (new game-night workflow); otherwise the recorded headcount.
+                -- Legacy games (count 0) still count; a known small game (1-5)
+                -- is excluded.
+                CASE
+                    WHEN EXISTS (
+                        SELECT 1 FROM dbo.tournament_confirmations c
+                        WHERE c.tournament_id = t.id
+                    )
+                    THEN (
+                        SELECT COUNT(*) FROM dbo.tournament_confirmations c
+                        WHERE c.tournament_id = t.id
+                    )
+                    ELSE t.players
+                END
+            ) NOT BETWEEN 1 AND 5
+    )
 GROUP BY u.id, u.name, u.nickname, u.location;
 GO
 

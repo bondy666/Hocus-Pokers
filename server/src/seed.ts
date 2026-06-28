@@ -22,10 +22,12 @@ export interface TournamentDto {
   venue: string;
   address?: string;
   players: number;
+  buyIn?: number;
   prizePool: number;
   status: "live" | "upcoming" | "complete";
   winnerId?: string;
   hostId?: string;
+  confirmedPlayerIds?: string[];
 }
 
 export const members: MemberDto[] = [

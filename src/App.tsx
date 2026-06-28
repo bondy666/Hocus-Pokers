@@ -34,7 +34,7 @@ const nav = [
   { to: "/halloffame", label: "Hall of Fame" },
   { to: "/cardroom", label: "Card Room" },
   { to: "/rules", label: "House Rules" },
-  { to: "/admin", label: "Score Keeper" },
+  { to: "/admin", label: "Trophy Room" },
 ];
 
 function ScrollToTop() {

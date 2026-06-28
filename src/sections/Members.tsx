@@ -1,8 +1,16 @@
 import { useState, useRef, type FormEvent, type ChangeEvent } from "react";
 import { Link } from "react-router-dom";
-import { gbp, profileWinRate, PROFILE_GAMES, type Member } from "../data.ts";
+import { gbp, winRate, type Member } from "../data.ts";
 import { useClub } from "../ClubContext.ts";
-import { createMember, updateMember, uploadMemberAvatar, type NewMember } from "../api.ts";
+import {
+  createMember,
+  updateMember,
+  deleteMember,
+  uploadMemberAvatar,
+  awardTrophy,
+  deleteTrophy,
+  type NewMember,
+} from "../api.ts";
 
 const blankMember: NewMember = {
   name: "",
@@ -10,6 +18,7 @@ const blankMember: NewMember = {
   location: "Ealing",
   email: "",
   joined: new Date().getFullYear(),
+  games: 50,
 };
 
 function initials(name: string): string {
@@ -43,7 +52,7 @@ export default function Members() {
 
         {!user && source !== "seed" && (
           <p className="member-hint">
-            Sign in on the Score Keeper page to add or update members.
+            Sign in on the Trophy Room page to add or update members.
           </p>
         )}
 
@@ -96,15 +105,38 @@ function MemberCard({
             location: member.location,
             email: member.email ?? "",
             joined: member.joined,
+            games: member.games,
           }}
           submitLabel="Save changes"
           onCancel={() => setEditing(false)}
           onSubmit={async (form) => {
-            await updateMember(member.id, { ...form, joined: Number(form.joined) || undefined });
+            await updateMember(member.id, {
+              ...form,
+              joined: Number(form.joined) || undefined,
+              games: Number(form.games) || 0,
+            });
             await refresh();
             setEditing(false);
           }}
         />
+        <TrophyManager member={member} refresh={refresh} />
+        <div className="member-card-actions danger-zone">
+          <button
+            type="button"
+            className="btn-danger"
+            onClick={async () => {
+              if (!confirm(`Delete ${member.name}? This cannot be undone.`)) return;
+              try {
+                await deleteMember(member.id);
+                await refresh();
+              } catch (err) {
+                alert((err as Error).message);
+              }
+            }}
+          >
+            Delete member
+          </button>
+        </div>
       </article>
     );
   }
@@ -144,11 +176,11 @@ function MemberCard({
           <span className="ms-label">Wins</span>
         </div>
         <div>
-          <span className="ms-value">{PROFILE_GAMES}</span>
+        <span className="ms-value">{member.games}</span>
           <span className="ms-label">Games</span>
         </div>
         <div>
-          <span className="ms-value">{profileWinRate(member)}%</span>
+        <span className="ms-value">{winRate(member)}%</span>
           <span className="ms-label">Win rate</span>
         </div>
       </div>
@@ -294,9 +326,28 @@ function MemberForm({
           <input
             type="number"
             value={form.joined ?? ""}
-            onChange={(e) => setForm({ ...form, joined: Number(e.target.value) })}
+            onChange={(e) =>
+              setForm({
+                ...form,
+                joined: e.target.value === "" ? undefined : Number(e.target.value),
+              })
+            }
             min={1990}
             max={2100}
+          />
+        </label>
+        <label className="member-field">
+          <span>Games</span>
+          <input
+            type="number"
+            value={form.games ?? ""}
+            onChange={(e) =>
+              setForm({
+                ...form,
+                games: e.target.value === "" ? undefined : Number(e.target.value),
+              })
+            }
+            min={0}
           />
         </label>
       </div>
@@ -332,5 +383,94 @@ function MemberForm({
         </button>
       </div>
     </form>
+  );
+}
+
+function TrophyManager({
+  member,
+  refresh,
+}: {
+  member: Member;
+  refresh: () => Promise<void>;
+}) {
+  const [label, setLabel] = useState("");
+  const [emoji, setEmoji] = useState("🏆");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function add(e: FormEvent) {
+    e.preventDefault();
+    if (!label.trim()) return;
+    try {
+      setBusy(true);
+      setError(null);
+      await awardTrophy(member.id, { label: label.trim(), emoji: emoji || "🏆" });
+      setLabel("");
+      setEmoji("🏆");
+      await refresh();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(id: string, lbl: string) {
+    if (!confirm(`Remove trophy “${lbl}”?`)) return;
+    try {
+      setBusy(true);
+      setError(null);
+      await deleteTrophy(id);
+      await refresh();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="member-trophy-manager">
+      <h4 className="member-form-subtitle">Trophies</h4>
+      {member.trophies.length > 0 ? (
+        <div className="trophy-row">
+          {member.trophies.map((t) => (
+            <span className="trophy editable" key={t.id} title={t.label}>
+              <span className="trophy-emoji">{t.emoji}</span>
+              {t.label}
+              <button
+                type="button"
+                className="trophy-remove"
+                onClick={() => remove(t.id, t.label)}
+                disabled={busy}
+                aria-label={`Remove ${t.label}`}
+              >
+                ✕
+              </button>
+            </span>
+          ))}
+        </div>
+      ) : (
+        <p className="stats-note">No trophies yet.</p>
+      )}
+      <form className="trophy-add-row" onSubmit={add}>
+        <input
+          className="trophy-add-emoji"
+          value={emoji}
+          onChange={(e) => setEmoji(e.target.value)}
+          aria-label="Trophy emoji"
+        />
+        <input
+          className="trophy-add-label"
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          placeholder="Add a trophy (e.g. Bluff of the Year)"
+        />
+        <button type="submit" className="btn-ghost" disabled={busy || !label.trim()}>
+          Add
+        </button>
+      </form>
+      {error && <p className="chip-err">{error}</p>}
+    </div>
   );
 }

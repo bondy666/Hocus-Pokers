@@ -69,14 +69,14 @@ export default function CardRoom() {
           </dl>
         </div>
 
+        <BanterBox />
+
         <div className="cardroom-schedule">
           <NightCard kind="next" tournament={next} members={members} />
           <NightCard kind="previous" tournament={previous} members={members} />
         </div>
 
         <NotificationToggle />
-
-        <BanterBox />
       </div>
     </section>
   );

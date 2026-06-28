@@ -4,6 +4,10 @@ export interface BarDatum {
   id?: string;
   label: string;
   value: number;
+  // Optional x-axis caption. When omitted, the first word of `label` is used
+  // (handy for player names); set this when `label` is multi-word, e.g. a game
+  // name, and you want a cleaner axis tick such as a date.
+  axisLabel?: string;
 }
 
 interface Props {
@@ -77,7 +81,7 @@ export default function BarChart({ items, yMax = 10000, height = 320, format = d
           const bottom = y(Math.min(0, d.value));
           const h = Math.max(1, bottom - top);
           const fill = d.value < 0 ? NEG : POS;
-          const short = d.label.split(" ")[0];
+          const short = d.axisLabel ?? d.label.split(" ")[0];
           return (
             <g key={d.id ?? i}>
               <rect x={cx - barW / 2} y={top} width={barW} height={h} rx={3} fill={fill}>

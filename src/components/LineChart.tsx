@@ -5,6 +5,8 @@ interface Props {
   labels: string[]; // x-axis labels (tournament names/dates)
   series: TimelineSeries[]; // each with points [{x,y}]
   height?: number;
+  yMin?: number; // optional fixed lower bound
+  yMax?: number; // optional fixed upper bound
 }
 
 const PALETTE = [
@@ -22,7 +24,7 @@ const PALETTE = [
 
 const fmt = (n: number) => `${n < 0 ? "-" : ""}£${Math.abs(Math.round(n)).toLocaleString("en-GB")}`;
 
-export default function LineChart({ labels, series, height = 320 }: Props) {
+export default function LineChart({ labels, series, height = 320, yMin: yMinProp, yMax: yMaxProp }: Props) {
   const [hidden, setHidden] = useState<Set<string>>(new Set());
 
   const W = 760;
@@ -51,8 +53,10 @@ export default function LineChart({ labels, series, height = 320 }: Props) {
       min -= 100;
       max += 100;
     }
+    if (yMinProp !== undefined) min = Math.min(min, yMinProp);
+    if (yMaxProp !== undefined) max = Math.max(max, yMaxProp);
     return { minY: min, maxY: max, maxX: Math.max(mx, 1) };
-  }, [series]);
+  }, [series, yMinProp, yMaxProp]);
 
   const x = (i: number) => padL + (maxX === 0 ? 0 : (i / maxX) * plotW);
   const y = (v: number) => padT + plotH - ((v - minY) / (maxY - minY)) * plotH;

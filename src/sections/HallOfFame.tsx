@@ -11,6 +11,19 @@ export default function HallOfFame() {
   const { members, tournaments } = useClub();
   const hof = buildHallOfFame(members, tournaments);
 
+  // Group champions into podium tiers by trophy count so everyone on an equal
+  // win total shares the same podium step (and the same medal). We show the top
+  // three distinct trophy counts; any players beyond that fall to the table.
+  const podiumTiers: (typeof hof.champions)[] = [];
+  for (const c of hof.champions) {
+    const last = podiumTiers[podiumTiers.length - 1];
+    if (last && last[0].wins === c.wins) last.push(c);
+    else podiumTiers.push([c]);
+  }
+  const topTiers = podiumTiers.slice(0, 3);
+  const podiumIds = new Set(topTiers.flat().map((c) => c.id));
+  const restChampions = hof.champions.filter((c) => !podiumIds.has(c.id));
+
   const playerLink = (id: string | undefined, name: string) =>
     id ? (
       <Link className="player-link" to={`/player/${id}`}>
@@ -32,20 +45,30 @@ export default function HallOfFame() {
         <div className="hof-block">
           <h3 className="hof-title">🏆 Champions</h3>
           <div className="hof-podium">
-            {hof.champions.slice(0, 3).map((c, i) => (
-              <div className={`hof-podium-card place-${i + 1}`} key={c.id}>
+            {topTiers.map((tier, i) => (
+              <div className={`hof-podium-card place-${i + 1}`} key={tier[0].wins}>
                 <div className="hof-podium-medal">{medal[i]}</div>
-                <div className="hof-podium-name">{playerLink(c.id, c.name)}</div>
-                <div className="hof-podium-wins">{c.wins} wins</div>
+                <div className="hof-podium-name">
+                  {tier.length === 1 ? (
+                    playerLink(tier[0].id, tier[0].name)
+                  ) : (
+                    <ul className="hof-podium-list">
+                      {tier.map((c) => (
+                        <li key={c.id}>{playerLink(c.id, c.name)}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                <div className="hof-podium-wins">{tier[0].wins} wins</div>
               </div>
             ))}
           </div>
-          {hof.champions.length > 3 && (
+          {restChampions.length > 0 && (
             <table className="hof-table">
               <tbody>
-                {hof.champions.slice(3).map((c, i) => (
+                {restChampions.map((c) => (
                   <tr key={c.id}>
-                    <td className="hof-rank">{i + 4}</td>
+                    <td className="hof-rank">{c.rank}</td>
                     <td>{playerLink(c.id, c.name)}</td>
                     <td className="num">{c.wins} wins</td>
                   </tr>
@@ -92,7 +115,7 @@ export default function HallOfFame() {
                   </tr>
                 </thead>
                 <tbody>
-                  {hof.droughts.slice(0, 8).map((d) => (
+                  {hof.droughts.map((d) => (
                     <tr key={d.id}>
                       <td>{playerLink(d.id, d.name)}</td>
                       <td className="num">{d.longest}</td>
@@ -109,7 +132,7 @@ export default function HallOfFame() {
             <h3 className="hof-title">🏠 Hosts leaderboard</h3>
             <p className="hof-note">Who's put the felt out most often.</p>
             {hof.hosts.length === 0 ? (
-              <p className="hof-empty">No host data yet — add hosts in Score Keeper.</p>
+              <p className="hof-empty">No host data yet — set a game's host on the Tournaments page.</p>
             ) : (
               <table className="hof-table">
                 <tbody>
@@ -155,7 +178,7 @@ export default function HallOfFame() {
           {/* First / last appearance */}
           <div className="hof-block hof-wide">
             <h3 className="hof-title">📅 First &amp; last appearance</h3>
-            <p className="hof-note">Based on games won or hosted.</p>
+            <p className="hof-note">Based on games attended, won or hosted.</p>
             <table className="hof-table">
               <thead>
                 <tr>

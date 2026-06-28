@@ -3,6 +3,7 @@ import {
   getPushConfig,
   savePushSubscription,
   removePushSubscription,
+  sendTestPush,
 } from "../api.ts";
 
 // Convert a base64url VAPID key into the Uint8Array the Push API expects.
@@ -21,6 +22,7 @@ type State = "loading" | "unsupported" | "denied" | "off" | "on" | "busy";
 export default function NotificationToggle() {
   const [state, setState] = useState<State>("loading");
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
 
   const supported =
     typeof window !== "undefined" &&
@@ -82,6 +84,7 @@ export default function NotificationToggle() {
 
   async function disable() {
     setError(null);
+    setInfo(null);
     setState("busy");
     try {
       const reg = await navigator.serviceWorker.ready;
@@ -94,6 +97,23 @@ export default function NotificationToggle() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't turn notifications off.");
       setState("on");
+    }
+  }
+
+  async function sendTest() {
+    setError(null);
+    setInfo(null);
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      if (!sub) {
+        setError("No active subscription — turn notifications off and on again.");
+        return;
+      }
+      await sendTestPush(sub.endpoint);
+      setInfo("Test sent — check your notifications.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't send a test notification.");
     }
   }
 
@@ -132,9 +152,14 @@ export default function NotificationToggle() {
       )}
 
       {state === "on" && (
-        <button type="button" className="btn-ghost" onClick={disable}>
-          ✓ On — tap to turn off
-        </button>
+        <div className="notify-toggle-actions">
+          <button type="button" className="btn-ghost" onClick={disable}>
+            ✓ On — tap to turn off
+          </button>
+          <button type="button" className="btn-ghost" onClick={sendTest}>
+            Send test
+          </button>
+        </div>
       )}
 
       {state === "busy" && (
@@ -143,6 +168,7 @@ export default function NotificationToggle() {
         </button>
       )}
 
+      {info && <p className="notify-toggle-note">{info}</p>}
       {error && <p className="notify-toggle-error">{error}</p>}
     </div>
   );

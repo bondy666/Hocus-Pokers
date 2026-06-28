@@ -5,7 +5,7 @@ export default function HouseRules() {
     <section className="section" id="rules">
       <div className="section-inner">
         <h2 className="section-title">House Rules</h2>
-        <p className="section-sub">Six rules. Break them and the snack fund wins.</p>
+        <p className="section-sub">Nine rules. Learn them, live by them.</p>
 
         <ol className="rules-grid">
           {houseRules.map((r, i) => (

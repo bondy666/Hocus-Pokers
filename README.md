@@ -1,7 +1,7 @@
 # Hocus Pokers 🂡
 
 A card-room–themed **members club stats tracker** for the *Hocus Pokers* poker club
-of Ealing, London. It keeps tally of live-tournament stats — career
+of Horsham, West Sussex. It keeps tally of live-tournament stats — career
 earnings/losses, wins, games played, venues and trophies — rather than playing
 poker itself.
 
@@ -10,7 +10,7 @@ Built on the same stack as the club's sibling WhiskyClub site:
 
 ## Sections
 
-1. **Hero** — club name, founding location (Ealing) and four headline stats
+1. **Hero** — club name, founding location (Horsham) and four headline stats
    (members, tournaments, prize pool, years running).
 2. **Leaderboard** — career net P&L on a felt-green table, colour-coded green/red,
    with wins and games played. The table leader gets a gold highlight.
@@ -89,9 +89,9 @@ npm --prefix server test
 | POST   | `/api/tournaments/:id/results`   | Record a player's result (auto-sets winner if 1st)   |
 | POST   | `/api/members/:id/trophies`      | Award a trophy to a member                           |
 
-**Write endpoints require a signed-in user _and_ a database.** They return `401`
-when not signed in, `403` if signed in but not on the `ADMIN_EMAILS` allow-list,
-and `503` in seed mode (no database).
+**Write endpoints require a signed-in user _and_ a database.** Every signed-in
+member may save — there is no organiser-only restriction. They return `401`
+when not signed in, and `503` in seed mode (no database).
 
 ## Authentication (Google / Microsoft sign-in)
 
@@ -108,8 +108,9 @@ testable auth logic (principal decoding, allow-list, access decisions) lives in
 - **Microsoft** is configured with the `common` tenant, so both work/school and
   personal Microsoft (Outlook/Hotmail) accounts can sign in. **Google** covers
   any Gmail / Google account.
-- **Allow-list**: set `ADMIN_EMAILS` (comma-separated) to restrict who can save.
-  Empty means any signed-in user may save.
+- **Access**: any signed-in member may save — every signed-in account has full
+  access. `ADMIN_EMAILS` is retained for backwards compatibility but no longer
+  restricts who can save.
 
 ### Local development
 

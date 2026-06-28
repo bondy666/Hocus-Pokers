@@ -5,6 +5,8 @@ import path from "path";
 import fs from "fs";
 import crypto from "crypto";
 import multer from "multer";
+import heicConvert from "heic-convert";
+import { fromFile as fileTypeFromFile } from "file-type";
 import webpush from "web-push";
 import { getPool, sql, sqlConfigured } from "./db/sql";
 import {
@@ -70,6 +72,7 @@ const ALLOWED_IMAGE_TYPES = new Set([
   "image/webp",
   "image/gif",
   "image/heic",
+  "image/heif",
 ]);
 
 const upload = multer({
@@ -86,7 +89,58 @@ const upload = multer({
   },
 });
 
-// ----- data access -----
+// iPhones upload photos as HEIC/HEIF, which iOS Safari renders fine but desktop
+// browsers (Chrome, Edge, Firefox) cannot display. Convert any HEIC/HEIF upload
+// to JPEG on disk so the image shows everywhere. Mutates the multer file in
+// place (filename / mimetype / path) and returns it; non-HEIC files pass
+// through untouched.
+async function normalizeUploadedImage(
+  file: Express.Multer.File
+): Promise<Express.Multer.File> {
+  const isHeic =
+    file.mimetype === "image/heic" ||
+    file.mimetype === "image/heif" ||
+    /\.(heic|heif)$/i.test(file.originalname || file.filename);
+  if (!isHeic) return file;
+
+  const sourcePath = path.join(uploadDir, file.filename);
+  try {
+    const input = await fs.promises.readFile(sourcePath);
+    const output = await heicConvert({ buffer: input, format: "JPEG", quality: 0.9 });
+    const newFilename = file.filename.replace(/\.[^.]*$/, "") + ".jpg";
+    await fs.promises.writeFile(path.join(uploadDir, newFilename), Buffer.from(output));
+    await fs.promises.unlink(sourcePath).catch(() => {});
+    file.filename = newFilename;
+    file.path = path.join(uploadDir, newFilename);
+    file.mimetype = "image/jpeg";
+  } catch (err) {
+    console.error("HEIC conversion failed for", file.filename, err);
+  }
+  return file;
+}
+
+// Verify actual file content against allowed MIME types using magic bytes,
+// ignoring the client-supplied Content-Type. Deletes the file and returns false
+// if the content doesn't match a permitted image type.
+async function verifyImageMagicBytes(
+  file: Express.Multer.File,
+  res: express.Response
+): Promise<boolean> {
+  const filePath = path.join(uploadDir, file.filename);
+  try {
+    const detected = await fileTypeFromFile(filePath);
+    if (!detected || !ALLOWED_IMAGE_TYPES.has(detected.mime)) {
+      await fs.promises.unlink(filePath).catch(() => {});
+      res.status(400).json({ error: "The uploaded file is not a valid image." });
+      return false;
+    }
+    return true;
+  } catch {
+    await fs.promises.unlink(filePath).catch(() => {});
+    res.status(400).json({ error: "Could not verify the uploaded file." });
+    return false;
+  }
+}
 
 // The original schema has no email column; add it lazily/idempotently so
 // members can store the address they use to sign in.
@@ -107,6 +161,10 @@ function ensureUsersSchema(): Promise<void> {
       await pool.request().query(`
         IF COL_LENGTH('dbo.users', 'avatar_type') IS NULL
           ALTER TABLE dbo.users ADD avatar_type NVARCHAR(100) NULL;
+      `);
+      await pool.request().query(`
+        IF COL_LENGTH('dbo.users', 'games_played') IS NULL
+          ALTER TABLE dbo.users ADD games_played INT NULL;
       `);
     })().catch((err) => {
       usersReady = null;
@@ -140,17 +198,137 @@ function ensureTournamentsSchema(): Promise<void> {
   return tournamentsReady;
 }
 
+// Confirmed-player roster shown on each tournament card. Created lazily so the
+// feature works even on databases provisioned before this table existed.
+let confirmationsReady: Promise<void> | null = null;
+
+function ensureConfirmationsSchema(): Promise<void> {
+  if (!confirmationsReady) {
+    confirmationsReady = (async () => {
+      const pool = await getPool();
+      await pool.request().query(`
+        IF OBJECT_ID('dbo.tournament_confirmations', 'U') IS NULL
+        CREATE TABLE dbo.tournament_confirmations (
+          id             INT IDENTITY(1,1) PRIMARY KEY,
+          tournament_id  INT NOT NULL
+            CONSTRAINT FK_confirmations_tournament REFERENCES dbo.tournaments(id) ON DELETE CASCADE,
+          user_id        INT NOT NULL
+            CONSTRAINT FK_confirmations_user REFERENCES dbo.users(id) ON DELETE CASCADE,
+          created_at     DATETIME2     NOT NULL DEFAULT SYSUTCDATETIME(),
+          CONSTRAINT UQ_confirmations UNIQUE (tournament_id, user_id)
+        );
+      `);
+    })().catch((err) => {
+      confirmationsReady = null;
+      throw err;
+    });
+  }
+  return confirmationsReady;
+}
+
+// Leaderboard view: career standings count only "trophy games" â€” the first
+// game of a night (earliest tournament id for that date) that had 6+ registered
+// (confirmed) members. Second/later games of a night never affect the
+// leaderboard. Recreated lazily so databases provisioned with the old
+// (count-everything) view get upgraded on first read.
+let leaderboardViewReady: Promise<void> | null = null;
+
+function ensureLeaderboardView(): Promise<void> {
+  if (!leaderboardViewReady) {
+    leaderboardViewReady = (async () => {
+      const pool = await getPool();
+      await pool.request().query(`
+        CREATE OR ALTER VIEW dbo.vw_leaderboard AS
+        SELECT
+            u.id,
+            u.name,
+            u.nickname,
+            u.location,
+            ISNULL(SUM(r.net), 0)                                AS net_pnl,
+            -- Games played = the trophy games this player has a result in.
+            COUNT(r.id)                                          AS games,
+            -- Wins come from the recorded winner of each trophy game so the
+            -- count includes legacy games that have no per-result rows.
+            (
+                SELECT COUNT(*)
+                FROM dbo.tournaments tw
+                WHERE tw.winner_id = u.id
+                  AND tw.status = 'complete'
+                  AND tw.id = (
+                        SELECT MIN(t2.id)
+                        FROM dbo.tournaments t2
+                        WHERE t2.played_on = tw.played_on
+                    )
+                  AND (
+                        -- A trophy game must have at least 6 players. The
+                        -- headcount is the confirmed roster when one exists (the
+                        -- game-night workflow); otherwise the recorded headcount.
+                        -- Legacy games predate rosters (count 0) and are trusted
+                        -- as full trophy nights; a known small game (1-5) is out.
+                        CASE
+                            WHEN EXISTS (
+                                SELECT 1 FROM dbo.tournament_confirmations c
+                                WHERE c.tournament_id = tw.id
+                            )
+                            THEN (
+                                SELECT COUNT(*) FROM dbo.tournament_confirmations c
+                                WHERE c.tournament_id = tw.id
+                            )
+                            ELSE tw.players
+                        END
+                    ) NOT BETWEEN 1 AND 5
+            )                                                   AS wins
+        FROM dbo.users u
+        LEFT JOIN dbo.tournament_results r ON r.user_id = u.id
+            AND r.tournament_id IN (
+                SELECT t.id
+                FROM dbo.tournaments t
+                WHERE t.id = (
+                        SELECT MIN(t2.id)
+                        FROM dbo.tournaments t2
+                        WHERE t2.played_on = t.played_on
+                    )
+                  AND (
+                        -- "Registered members" = the confirmed roster when one
+                        -- exists (game-night workflow); otherwise the recorded
+                        -- headcount. Legacy games (count 0) still count; a known
+                        -- small game (1-5) is excluded.
+                        CASE
+                            WHEN EXISTS (
+                                SELECT 1 FROM dbo.tournament_confirmations c
+                                WHERE c.tournament_id = t.id
+                            )
+                            THEN (
+                                SELECT COUNT(*) FROM dbo.tournament_confirmations c
+                                WHERE c.tournament_id = t.id
+                            )
+                            ELSE t.players
+                        END
+                    ) NOT BETWEEN 1 AND 5
+            )
+        GROUP BY u.id, u.name, u.nickname, u.location;
+      `);
+    })().catch((err) => {
+      leaderboardViewReady = null;
+      throw err;
+    });
+  }
+  return leaderboardViewReady;
+}
+
 async function loadMembers(): Promise<MemberDto[]> {
   if (!usingDb) return seedMembers;
 
   await ensureUsersSchema();
+  await ensureConfirmationsSchema();
+  await ensureLeaderboardView();
   const pool = await getPool();
   const board = await pool.request().query(`
     SELECT id, name, nickname, location, net_pnl, games, wins
     FROM dbo.vw_leaderboard
   `);
   const users = await pool.request().query(`
-    SELECT id, joined_year, email, avatar, avatar_type FROM dbo.users
+    SELECT id, joined_year, email, avatar, avatar_type, games_played FROM dbo.users
   `);
   const trophyRows = await pool.request().query(`
     SELECT id, user_id, label, emoji FROM dbo.trophies
@@ -165,10 +343,30 @@ async function loadMembers(): Promise<MemberDto[]> {
   const avatarById = new Map<number, string>(
     users.recordset.map((u: any) => [u.id, u.avatar ?? ""])
   );
+  const gamesById = new Map<number, number | null>(
+    users.recordset.map((u: any) => [u.id, u.games_played ?? null])
+  );
+
+  // From today onwards, every game night (distinct played_on date) a member is
+  // confirmed for is added to their total automatically â€” one per night,
+  // regardless of how many games are played that night. The manual games_played
+  // value stays a frozen historical baseline; future attendance accrues on top.
+  // Members not on a night's confirmed roster don't get that night counted.
+  const confirmedNightsResult = await pool.request().query(`
+    SELECT c.user_id, COUNT(DISTINCT t.played_on) AS confirmed_nights
+    FROM dbo.tournament_confirmations c
+    JOIN dbo.tournaments t ON t.id = c.tournament_id
+    WHERE t.played_on >= CAST(SYSUTCDATETIME() AS DATE)
+    GROUP BY c.user_id
+  `);
+  const futureConfirmedNights = new Map<number, number>(
+    confirmedNightsResult.recordset.map((row: any) => [row.user_id, Number(row.confirmed_nights)])
+  );
+
   const trophiesByUser = new Map<number, { id: string; label: string; emoji: string }[]>();
   for (const t of trophyRows.recordset) {
     const list = trophiesByUser.get(t.user_id) ?? [];
-    list.push({ id: String(t.id), label: t.label, emoji: t.emoji ?? "🏆" });
+    list.push({ id: String(t.id), label: t.label, emoji: t.emoji ?? "ðŸ†" });
     trophiesByUser.set(t.user_id, list);
   }
 
@@ -185,7 +383,7 @@ async function loadMembers(): Promise<MemberDto[]> {
       joined: joinedById.get(r.id) ?? 0,
       netPnl: Number(r.net_pnl ?? 0),
       wins: Number(r.wins ?? 0),
-      games: Number(r.games ?? 0),
+      games: Number(gamesById.get(r.id) ?? r.games ?? 0) + (futureConfirmedNights.get(r.id) ?? 0),
       trophies: trophiesByUser.get(r.id) ?? [],
     };
   });
@@ -195,12 +393,25 @@ async function loadTournaments(): Promise<TournamentDto[]> {
   if (!usingDb) return seedTournaments;
 
   await ensureTournamentsSchema();
+  await ensureConfirmationsSchema();
   const pool = await getPool();
   const result = await pool.request().query(`
-    SELECT id, name, played_on, venue, address, players, prize_pool, status, winner_id, host_id
+    SELECT id, name, played_on, venue, address, players, buy_in, prize_pool, status, winner_id, host_id
     FROM dbo.tournaments
     ORDER BY played_on DESC
   `);
+
+  const confirmations = await pool.request().query(`
+    SELECT tournament_id, user_id
+    FROM dbo.tournament_confirmations
+    ORDER BY created_at ASC, id ASC
+  `);
+  const confirmedByTournament = new Map<number, string[]>();
+  for (const c of confirmations.recordset as any[]) {
+    const list = confirmedByTournament.get(c.tournament_id) ?? [];
+    list.push(String(c.user_id));
+    confirmedByTournament.set(c.tournament_id, list);
+  }
 
   return result.recordset.map((r: any) => ({
     id: String(r.id),
@@ -209,10 +420,12 @@ async function loadTournaments(): Promise<TournamentDto[]> {
     venue: r.venue,
     address: r.address ?? "",
     players: Number(r.players ?? 0),
+    buyIn: Number(r.buy_in ?? 0),
     prizePool: Number(r.prize_pool ?? 0),
     status: r.status,
     winnerId: r.winner_id != null ? String(r.winner_id) : undefined,
     hostId: r.host_id != null ? String(r.host_id) : undefined,
+    confirmedPlayerIds: confirmedByTournament.get(r.id) ?? [],
   }));
 }
 
@@ -230,7 +443,7 @@ app.get("/api/members", async (_req, res) => {
   try {
     res.json(await loadMembers());
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to load members", details: err.message });
+    serverError(res, "Failed to load members", err);
   }
 });
 
@@ -247,7 +460,7 @@ app.get("/api/leaderboard", async (_req, res) => {
       )
     );
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to load leaderboard", details: err.message });
+    serverError(res, "Failed to load leaderboard", err);
   }
 });
 
@@ -255,7 +468,7 @@ app.get("/api/tournaments", async (_req, res) => {
   try {
     res.json(await loadTournaments());
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to load tournaments", details: err.message });
+    serverError(res, "Failed to load tournaments", err);
   }
 });
 
@@ -263,7 +476,7 @@ app.get("/api/tournaments", async (_req, res) => {
 //
 // In production, App Service "Authentication" (Easy Auth) handles the Google /
 // Microsoft OAuth flow and forwards a base64 'x-ms-client-principal' header to
-// this server. We never see passwords or tokens — we just read the principal.
+// this server. We never see passwords or tokens â€” we just read the principal.
 //
 // For local development (no Easy Auth in front), set ALLOW_DEV_AUTH=true and
 // optionally DEV_USER_EMAIL to simulate a signed-in user.
@@ -307,6 +520,13 @@ function requireDb(res: express.Response): boolean {
   return true;
 }
 
+// Log the full error server-side and return only the safe message to the client
+// so internal details (schema names, query fragments, etc.) are never exposed.
+function serverError(res: express.Response, msg: string, err: unknown): void {
+  console.error(msg, err);
+  res.status(500).json({ error: msg });
+}
+
 // Lighter gate than requireUser: any signed-in member (not just organisers on
 // the admin allow-list) may use this. Used for the date-poll voting/proposing.
 function requireSignedIn(req: express.Request, res: express.Response): Principal | null {
@@ -334,7 +554,7 @@ app.post("/api/members", async (req, res) => {
   if (!requireSignedIn(req, res)) return;
   try {
     await ensureUsersSchema();
-    const { name, nickname, location, email, joined } = req.body ?? {};
+    const { name, nickname, location, email, joined, games } = req.body ?? {};
     if (!name || typeof name !== "string") {
       return res.status(400).json({ error: "name is required" });
     }
@@ -350,14 +570,15 @@ app.post("/api/members", async (req, res) => {
       .input("Location", sql.NVarChar(120), location || null)
       .input("Email", sql.NVarChar(160), cleanEmail || null)
       .input("JoinedYear", sql.Int, Number(joined) || new Date().getFullYear())
+      .input("GamesPlayed", sql.Int, Number(games) || null)
       .query(`
-        INSERT INTO dbo.users (name, nickname, location, email, joined_year)
-        OUTPUT INSERTED.id, INSERTED.name, INSERTED.nickname, INSERTED.location, INSERTED.email, INSERTED.joined_year
-        VALUES (@Name, @Nickname, @Location, @Email, @JoinedYear)
+        INSERT INTO dbo.users (name, nickname, location, email, joined_year, games_played)
+        OUTPUT INSERTED.id, INSERTED.name, INSERTED.nickname, INSERTED.location, INSERTED.email, INSERTED.joined_year, INSERTED.games_played
+        VALUES (@Name, @Nickname, @Location, @Email, @JoinedYear, @GamesPlayed)
       `);
     res.status(201).json(result.recordset[0]);
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to create member", details: err.message });
+    serverError(res, "Failed to create member", err);
   }
 });
 
@@ -394,17 +615,17 @@ app.post("/api/tournaments", async (req, res) => {
     res.status(201).json(result.recordset[0]);
     const created = result.recordset[0];
     void sendPush({
-      title: "🃏 New tournament added",
-      body: `${created.name} · ${created.venue}${
+      title: "ðŸƒ New tournament added",
+      body: `${created.name} Â· ${created.venue}${
         created.played_on
-          ? " · " + new Date(created.played_on).toLocaleDateString("en-GB")
+          ? " Â· " + new Date(created.played_on).toLocaleDateString("en-GB")
           : ""
       }`,
       url: "/tournaments",
       tag: "tournament",
     });
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to create tournament", details: err.message });
+    serverError(res, "Failed to create tournament", err);
   }
 });
 
@@ -447,7 +668,7 @@ app.post("/api/tournaments/:id/results", async (req, res) => {
     if (err.number === 2627 || err.number === 2601) {
       return res.status(409).json({ error: "Result already recorded for this player" });
     }
-    res.status(500).json({ error: "Failed to record result", details: err.message });
+    serverError(res, "Failed to record result", err);
   }
 });
 
@@ -476,7 +697,7 @@ app.post("/api/members/:id/trophies", async (req, res) => {
       `);
     res.status(201).json(result.recordset[0]);
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to award trophy", details: err.message });
+    serverError(res, "Failed to award trophy", err);
   }
 });
 
@@ -503,7 +724,136 @@ app.get("/api/tournaments/:id/results", async (req, res) => {
       `);
     res.json(result.recordset);
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to load results", details: err.message });
+    serverError(res, "Failed to load results", err);
+  }
+});
+
+// Confirm a player for a tournament (adds them to the card's roster).
+app.post("/api/tournaments/:id/confirmations", async (req, res) => {
+  if (!requireUser(req, res)) return;
+  if (!requireDb(res)) return;
+  try {
+    const tournamentId = Number(req.params.id);
+    const { userId } = req.body ?? {};
+    if (!Number.isFinite(tournamentId) || !userId) {
+      return res.status(400).json({ error: "valid tournament id and userId are required" });
+    }
+    await ensureConfirmationsSchema();
+    const pool = await getPool();
+    await pool
+      .request()
+      .input("TournamentId", sql.Int, tournamentId)
+      .input("UserId", sql.Int, Number(userId))
+      .query(`
+        IF NOT EXISTS (
+          SELECT 1 FROM dbo.tournament_confirmations
+          WHERE tournament_id = @TournamentId AND user_id = @UserId
+        )
+        INSERT INTO dbo.tournament_confirmations (tournament_id, user_id)
+        VALUES (@TournamentId, @UserId);
+      `);
+    res.status(201).json({ ok: true });
+  } catch (err: any) {
+    serverError(res, "Failed to confirm player", err);
+  }
+});
+
+// Clone a tournament into a new "game" on the same night. The new game copies
+// the venue/date/buy-in/prize details and the confirmed-player roster, but
+// starts live with no winner so the night can run several games back-to-back.
+function stripGameSuffix(name: string): string {
+  return name.replace(/\s*[â€”-]\s*Game\s+\d+\s*$/i, "").trim();
+}
+
+app.post("/api/tournaments/:id/clone", async (req, res) => {
+  if (!requireUser(req, res)) return;
+  if (!requireDb(res)) return;
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "valid tournament id is required" });
+    }
+    await ensureTournamentsSchema();
+    await ensureConfirmationsSchema();
+    const pool = await getPool();
+
+    const srcResult = await pool
+      .request()
+      .input("Id", sql.Int, id)
+      .query(`SELECT * FROM dbo.tournaments WHERE id = @Id`);
+    const src = srcResult.recordset[0];
+    if (!src) return res.status(404).json({ error: "Tournament not found" });
+
+    // Work out the next "Game N" number among games that share this night/venue
+    // and the same base name (ignoring any existing " â€” Game N" suffix).
+    const base = stripGameSuffix(src.name);
+    const siblings = await pool
+      .request()
+      .input("PlayedOn", sql.Date, src.played_on)
+      .input("Venue", sql.NVarChar(160), src.venue)
+      .query(`SELECT name FROM dbo.tournaments WHERE played_on = @PlayedOn AND venue = @Venue`);
+    const sameBase = (siblings.recordset as any[]).filter(
+      (r) => stripGameSuffix(r.name).toLowerCase() === base.toLowerCase()
+    );
+    const nextNo = sameBase.length + 1;
+    const newName = `${base} â€” Game ${nextNo}`;
+
+    const inserted = await pool
+      .request()
+      .input("Name", sql.NVarChar(160), newName)
+      .input("PlayedOn", sql.Date, src.played_on)
+      .input("Venue", sql.NVarChar(160), src.venue)
+      .input("Address", sql.NVarChar(260), src.address ?? null)
+      .input("Players", sql.Int, Number(src.players) || 0)
+      .input("BuyIn", sql.Decimal(10, 2), Number(src.buy_in) || 0)
+      .input("PrizePool", sql.Decimal(10, 2), Number(src.prize_pool) || 0)
+      .input("HostId", sql.Int, src.host_id ?? null)
+      .query(`
+        INSERT INTO dbo.tournaments (name, played_on, venue, address, players, buy_in, prize_pool, status, winner_id, host_id)
+        OUTPUT INSERTED.*
+        VALUES (@Name, @PlayedOn, @Venue, @Address, @Players, @BuyIn, @PrizePool, 'live', NULL, @HostId)
+      `);
+    const created = inserted.recordset[0];
+
+    // Copy the confirmed-player roster onto the new game.
+    await pool
+      .request()
+      .input("NewId", sql.Int, created.id)
+      .input("SrcId", sql.Int, id)
+      .query(`
+        INSERT INTO dbo.tournament_confirmations (tournament_id, user_id)
+        SELECT @NewId, user_id FROM dbo.tournament_confirmations WHERE tournament_id = @SrcId
+      `);
+
+    res.status(201).json(created);
+  } catch (err: any) {
+    serverError(res, "Failed to create game", err);
+  }
+});
+
+// Remove a player's confirmation for a tournament.
+app.delete("/api/tournaments/:id/confirmations/:userId", async (req, res) => {
+  if (!requireUser(req, res)) return;
+  if (!requireDb(res)) return;
+  try {
+    const tournamentId = Number(req.params.id);
+    const userId = Number(req.params.userId);
+    if (!Number.isFinite(tournamentId) || !Number.isFinite(userId)) {
+      return res.status(400).json({ error: "valid tournament id and userId are required" });
+    }
+    await ensureConfirmationsSchema();
+    const pool = await getPool();
+    await pool
+      .request()
+      .input("TournamentId", sql.Int, tournamentId)
+      .input("UserId", sql.Int, userId)
+      .query(`
+        DELETE FROM dbo.tournament_confirmations
+        WHERE tournament_id = @TournamentId AND user_id = @UserId
+      `);
+    res.json({ ok: true });
+  } catch (err: any) {
+    serverError(res, "Failed to remove confirmation", err);
   }
 });
 
@@ -514,7 +864,7 @@ app.put("/api/members/:id", async (req, res) => {
   try {
     await ensureUsersSchema();
     const id = Number(req.params.id);
-    const { name, nickname, location, email, joined } = req.body ?? {};
+    const { name, nickname, location, email, joined, games } = req.body ?? {};
     if (!Number.isFinite(id) || !name) {
       return res.status(400).json({ error: "valid member id and name are required" });
     }
@@ -531,10 +881,11 @@ app.put("/api/members/:id", async (req, res) => {
       .input("Location", sql.NVarChar(120), location || null)
       .input("Email", sql.NVarChar(160), cleanEmail || null)
       .input("JoinedYear", sql.Int, Number(joined) || new Date().getFullYear())
+      .input("GamesPlayed", sql.Int, Number(games) || null)
       .query(`
         UPDATE dbo.users
-        SET name = @Name, nickname = @Nickname, location = @Location, email = @Email, joined_year = @JoinedYear
-        OUTPUT INSERTED.id, INSERTED.name, INSERTED.nickname, INSERTED.location, INSERTED.email, INSERTED.joined_year
+        SET name = @Name, nickname = @Nickname, location = @Location, email = @Email, joined_year = @JoinedYear, games_played = @GamesPlayed
+        OUTPUT INSERTED.id, INSERTED.name, INSERTED.nickname, INSERTED.location, INSERTED.email, INSERTED.joined_year, INSERTED.games_played
         WHERE id = @Id
       `);
     if (result.recordset.length === 0) {
@@ -542,7 +893,7 @@ app.put("/api/members/:id", async (req, res) => {
     }
     res.json(result.recordset[0]);
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to update member", details: err.message });
+    serverError(res, "Failed to update member", err);
   }
 });
 
@@ -575,7 +926,7 @@ app.delete("/api/members/:id", async (req, res) => {
     }
     res.json({ ok: true, id });
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to delete member", details: err.message });
+    serverError(res, "Failed to delete member", err);
   }
 });
 
@@ -601,7 +952,7 @@ app.get("/api/members/:id/avatar", async (req, res) => {
     res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
     fs.createReadStream(filePath).pipe(res);
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to load avatar", details: err.message });
+    serverError(res, "Failed to load avatar", err);
   }
 });
 
@@ -628,6 +979,8 @@ app.post("/api/members/:id/avatar", (req, res) => {
       if (!file) {
         return res.status(400).json({ error: "No image file was uploaded." });
       }
+      if (!await verifyImageMagicBytes(file, res)) return;
+      await normalizeUploadedImage(file);
       const pool = await getPool();
       // Capture any previous avatar so we can delete the old file afterwards.
       const prev = await pool
@@ -654,7 +1007,7 @@ app.post("/api/members/:id/avatar", (req, res) => {
         avatarUrl: `/api/members/${id}/avatar?v=${encodeURIComponent(file.filename)}`,
       });
     } catch (err: any) {
-      res.status(500).json({ error: "Failed to upload avatar", details: err.message });
+      serverError(res, "Failed to upload avatar", err);
     }
   });
 });
@@ -698,7 +1051,7 @@ app.put("/api/tournaments/:id", async (req, res) => {
     }
     res.json(result.recordset[0]);
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to update tournament", details: err.message });
+    serverError(res, "Failed to update tournament", err);
   }
 });
 
@@ -719,7 +1072,7 @@ app.delete("/api/tournaments/:id", async (req, res) => {
     }
     res.json({ ok: true, id });
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to delete tournament", details: err.message });
+    serverError(res, "Failed to delete tournament", err);
   }
 });
 
@@ -760,7 +1113,7 @@ app.put("/api/results/:id", async (req, res) => {
     }
     res.json(row);
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to update result", details: err.message });
+    serverError(res, "Failed to update result", err);
   }
 });
 
@@ -793,7 +1146,7 @@ app.delete("/api/results/:id", async (req, res) => {
     }
     res.json({ ok: true, id });
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to delete result", details: err.message });
+    serverError(res, "Failed to delete result", err);
   }
 });
 
@@ -826,7 +1179,7 @@ app.put("/api/trophies/:id", async (req, res) => {
     }
     res.json(result.recordset[0]);
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to update trophy", details: err.message });
+    serverError(res, "Failed to update trophy", err);
   }
 });
 
@@ -847,7 +1200,7 @@ app.delete("/api/trophies/:id", async (req, res) => {
     }
     res.json({ ok: true, id });
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to delete trophy", details: err.message });
+    serverError(res, "Failed to delete trophy", err);
   }
 });
 
@@ -913,7 +1266,7 @@ app.get("/api/tournaments/:id/photos", async (req, res) => {
       `);
     res.json(result.recordset.map(photoDto));
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to load photos", details: err.message });
+    serverError(res, "Failed to load photos", err);
   }
 });
 
@@ -937,7 +1290,7 @@ app.get("/api/photos/:id/file", async (req, res) => {
     res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
     fs.createReadStream(filePath).pipe(res);
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to load photo", details: err.message });
+    serverError(res, "Failed to load photo", err);
   }
 });
 
@@ -967,6 +1320,8 @@ app.post("/api/tournaments/:id/photos", (req, res) => {
       const pool = await getPool();
       const saved = [];
       for (const f of files) {
+        if (!await verifyImageMagicBytes(f, res)) return;
+        await normalizeUploadedImage(f);
         const result = await pool
           .request()
           .input("TournamentId", sql.Int, tournamentId)
@@ -983,7 +1338,7 @@ app.post("/api/tournaments/:id/photos", (req, res) => {
       }
       res.status(201).json(saved);
     } catch (err: any) {
-      res.status(500).json({ error: "Failed to save photos", details: err.message });
+      serverError(res, "Failed to save photos", err);
     }
   });
 });
@@ -1010,7 +1365,7 @@ app.delete("/api/photos/:id", async (req, res) => {
     fs.promises.unlink(filePath).catch(() => {});
     res.json({ ok: true, id });
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to delete photo", details: err.message });
+    serverError(res, "Failed to delete photo", err);
   }
 });
 
@@ -1069,7 +1424,7 @@ app.get("/api/banter", async (req, res) => {
     // Return oldest-first so the newest sits at the bottom of the thread.
     res.json(result.recordset.map((r: any) => banterDto(r, myEmail)).reverse());
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to load banter", details: err.message });
+    serverError(res, "Failed to load banter", err);
   }
 });
 
@@ -1097,13 +1452,13 @@ app.post("/api/banter", async (req, res) => {
     res.status(201).json(banterDto(result.recordset[0], principal.email.toLowerCase()));
     const author = principal.name || principal.email.split("@")[0] || "A member";
     void sendPush({
-      title: "💬 New banter at Hocus Pokers",
-      body: `${author}: ${body.length > 120 ? body.slice(0, 117) + "…" : body}`,
+      title: "ðŸ’¬ New banter at Hocus Pokers",
+      body: `${author}: ${body.length > 120 ? body.slice(0, 117) + "â€¦" : body}`,
       url: "/cardroom",
       tag: "banter",
     });
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to post message", details: err.message });
+    serverError(res, "Failed to post message", err);
   }
 });
 
@@ -1138,7 +1493,7 @@ app.delete("/api/banter/:id", async (req, res) => {
     await pool.request().input("Id", sql.Int, id).query(`DELETE FROM dbo.banter WHERE id = @Id`);
     res.json({ ok: true, id });
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to delete message", details: err.message });
+    serverError(res, "Failed to delete message", err);
   }
 });
 
@@ -1215,7 +1570,7 @@ app.get("/api/planning", async (req, res) => {
     });
     res.json(out);
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to load planner", details: err.message });
+    serverError(res, "Failed to load planner", err);
   }
 });
 
@@ -1251,7 +1606,7 @@ app.post("/api/planning/dates", async (req, res) => {
     if (err.number === 2627 || err.number === 2601) {
       return res.status(409).json({ error: "That date is already proposed" });
     }
-    res.status(500).json({ error: "Failed to propose date", details: err.message });
+    serverError(res, "Failed to propose date", err);
   }
 });
 
@@ -1301,7 +1656,7 @@ app.post("/api/planning/dates/:id/vote", async (req, res) => {
       .query(`SELECT COUNT(*) AS n FROM dbo.planning_votes WHERE date_id = @DateId`);
     res.json({ id: dateId, voteCount: count.recordset[0].n, votedByMe });
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to record vote", details: err.message });
+    serverError(res, "Failed to record vote", err);
   }
 });
 
@@ -1325,7 +1680,7 @@ app.delete("/api/planning/dates/:id", async (req, res) => {
     }
     res.json({ ok: true, id: dateId });
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to remove date", details: err.message });
+    serverError(res, "Failed to remove date", err);
   }
 });
 
@@ -1368,13 +1723,33 @@ app.post("/api/planning/dates/:id/setup", async (req, res) => {
         VALUES (@Name, @PlayedOn, @Venue, @Players, 0, 0, 'upcoming')
       `);
 
+    const tournamentId = created.recordset[0].id;
+
+    // Auto-confirm every member who voted on this date.
+    // Votes store voter_email; match to dbo.users.email to get user_id.
+    await pool
+      .request()
+      .input("TournamentId", sql.Int, tournamentId)
+      .input("DateId", sql.Int, dateId)
+      .query(`
+        INSERT INTO dbo.tournament_confirmations (tournament_id, user_id)
+        SELECT @TournamentId, u.id
+        FROM dbo.planning_votes v
+        JOIN dbo.users u ON LOWER(u.email) = LOWER(v.voter_email)
+        WHERE v.date_id = @DateId
+          AND NOT EXISTS (
+            SELECT 1 FROM dbo.tournament_confirmations c
+            WHERE c.tournament_id = @TournamentId AND c.user_id = u.id
+          )
+      `);
+
     // Clear the proposed date now it's locked in.
     await pool.request().input("Id", sql.Int, dateId)
       .query(`DELETE FROM dbo.planning_dates WHERE id = @Id`);
 
-    res.status(201).json({ id: created.recordset[0].id });
+    res.status(201).json({ id: tournamentId });
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to set up tournament", details: err.message });
+    serverError(res, "Failed to set up tournament", err);
   }
 });
 
@@ -1515,10 +1890,12 @@ function buildStats(rows: ResultJoinRow[]) {
 
   const totalBuyIn = players.reduce((s, p) => s + p.totalBuyIn, 0);
   const totalCashOut = players.reduce((s, p) => s + p.totalCashOut, 0);
+  // Career winnings: the player with the highest career net profit across every
+  // game (both games of a night included), and that net total.
   let biggestWin: { name: string; amount: number } | null = null;
-  for (const r of rows) {
-    if (!biggestWin || Number(r.net) > biggestWin.amount) {
-      biggestWin = { name: r.user_name, amount: Number(r.net) };
+  for (const p of players) {
+    if (!biggestWin || p.net > biggestWin.amount) {
+      biggestWin = { name: p.name, amount: p.net };
     }
   }
 
@@ -1564,7 +1941,7 @@ function buildStats(rows: ResultJoinRow[]) {
       totalBuyIn,
       totalCashOut,
       totalNet: totalCashOut - totalBuyIn,
-      tournaments: tournamentOrder.length,
+      tournaments: new Set(tournamentOrder.map((t) => t.date)).size,
       biggestWin,
     },
   };
@@ -1587,7 +1964,7 @@ app.get("/api/stats", async (_req, res) => {
     `);
     res.json(buildStats(result.recordset as ResultJoinRow[]));
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to load stats", details: err.message });
+    serverError(res, "Failed to load stats", err);
   }
 });
 
@@ -1648,7 +2025,7 @@ function seedStats() {
 
   const totalBuyIn = players.reduce((s, p) => s + p.totalBuyIn, 0);
   const totalCashOut = players.reduce((s, p) => s + p.totalCashOut, 0);
-  const best = [...seedMembers].sort((a, b) => b.netPnl - a.netPnl)[0];
+  const topWinner = [...players].sort((a, b) => b.net - a.net)[0];
 
   const podium = completed
     .slice()
@@ -1677,8 +2054,8 @@ function seedStats() {
       totalBuyIn,
       totalCashOut,
       totalNet: totalCashOut - totalBuyIn,
-      tournaments: seedTournaments.length,
-      biggestWin: best ? { name: best.name, amount: best.netPnl } : null,
+      tournaments: new Set(seedTournaments.map((t) => t.date)).size,
+      biggestWin: topWinner ? { name: topWinner.name, amount: topWinner.net } : null,
     },
   };
 }
@@ -1814,7 +2191,51 @@ app.post("/api/push/subscribe", async (req, res) => {
       `);
     res.status(201).json({ ok: true });
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to save subscription", details: err.message });
+    serverError(res, "Failed to save subscription", err);
+  }
+});
+
+// Send a test notification to a single device â€” the caller's own subscription.
+// Lets a member confirm push works on their phone without spamming the club.
+app.post("/api/push/test", async (req, res) => {
+  if (!pushEnabled) return res.status(503).json({ error: "Push is not configured" });
+  if (!requireDb(res)) return;
+  try {
+    const endpoint = String(req.body?.endpoint ?? req.body?.subscription?.endpoint ?? "");
+    if (!endpoint) return res.status(400).json({ error: "endpoint is required" });
+    await ensurePushSchema();
+    const pool = await getPool();
+    const result = await pool
+      .request()
+      .input("Endpoint", sql.NVarChar(500), endpoint)
+      .query(`SELECT endpoint, p256dh, auth FROM dbo.push_subscriptions WHERE endpoint = @Endpoint`);
+    const row = result.recordset[0];
+    if (!row) return res.status(404).json({ error: "Subscription not found â€” turn notifications off and on again." });
+    const data = JSON.stringify({
+      title: "ðŸ”” Test notification",
+      body: "Push notifications are working. See you at the table!",
+      url: "/",
+      tag: "test",
+    });
+    try {
+      await webpush.sendNotification(
+        { endpoint: row.endpoint, keys: { p256dh: row.p256dh, auth: row.auth } },
+        data
+      );
+    } catch (err: any) {
+      const code = err?.statusCode;
+      if (code === 404 || code === 410) {
+        await pool
+          .request()
+          .input("Endpoint", sql.NVarChar(500), endpoint)
+          .query(`DELETE FROM dbo.push_subscriptions WHERE endpoint = @Endpoint`);
+        return res.status(410).json({ error: "Subscription expired â€” turn notifications off and on again." });
+      }
+      throw err;
+    }
+    res.json({ ok: true });
+  } catch (err: any) {
+    serverError(res, "Failed to send test", err);
   }
 });
 
@@ -1832,7 +2253,7 @@ app.post("/api/push/unsubscribe", async (req, res) => {
       .query(`DELETE FROM dbo.push_subscriptions WHERE endpoint = @Endpoint`);
     res.json({ ok: true });
   } catch (err: any) {
-    res.status(500).json({ error: "Failed to remove subscription", details: err.message });
+    serverError(res, "Failed to remove subscription", err);
   }
 });
 

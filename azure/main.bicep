@@ -48,6 +48,16 @@ param microsoftClientId string = ''
 @description('Microsoft (Entra ID) client secret.')
 param microsoftClientSecret string = ''
 
+@description('VAPID public key for Web Push (safe to expose to browser clients).')
+param vapidPublicKey string = ''
+
+@secure()
+@description('VAPID private key for Web Push.')
+param vapidPrivateKey string = ''
+
+@description('VAPID subject — a mailto: or https URL identifying the push sender.')
+param vapidSubject string = 'mailto:club@hocuspokers.local'
+
 @description('Microsoft token issuer tenant. Use "common" to allow both work/school and personal Microsoft accounts.')
 param microsoftTenant string = 'common'
 
@@ -59,6 +69,8 @@ var webAppName = 'app-${baseName}-${environment}-${suffix}'
 var planName = 'plan-${baseName}-${environment}'
 var sqlServerName = 'sql-${baseName}-${environment}-${suffix}'
 var sqlDbName = 'sqldb-${baseName}-${environment}'
+var keyVaultName = 'kv-hp-${suffix}'
+var kvSecretsBase = 'https://${keyVaultName}.vault.azure.net/secrets'
 
 resource plan 'Microsoft.Web/serverfarms@2023-12-01' = {
   name: planName
@@ -113,6 +125,9 @@ var sqlConnectionString = 'Server=tcp:${sqlServer.properties.fullyQualifiedDomai
 resource webApp 'Microsoft.Web/sites@2023-12-01' = {
   name: webAppName
   location: location
+  identity: {
+    type: 'SystemAssigned'
+  }
   properties: {
     serverFarmId: plan.id
     httpsOnly: true
@@ -121,42 +136,37 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
       appCommandLine: 'npm start'
       ftpsState: 'Disabled'
       minTlsVersion: '1.2'
-      appSettings: [
-        {
-          name: 'NODE_ENV'
-          value: 'production'
-        }
-        {
-          name: 'PORT'
-          value: '8080'
-        }
-        {
-          name: 'WEBSITES_PORT'
-          value: '8080'
-        }
-        {
-          name: 'SCM_DO_BUILD_DURING_DEPLOYMENT'
-          value: 'false'
-        }
-        {
-          name: 'SQL_CONNECTION_STRING'
-          value: sqlConnectionString
-        }
-        {
-          name: 'ADMIN_EMAILS'
-          value: adminEmails
-        }
-        {
-          name: 'GOOGLE_PROVIDER_AUTHENTICATION_SECRET'
-          value: googleClientSecret
-        }
-        {
-          name: 'MICROSOFT_PROVIDER_AUTHENTICATION_SECRET'
-          value: microsoftClientSecret
-        }
-      ]
     }
   }
+}
+
+// Secrets live in Key Vault and are surfaced to the app as Key Vault references,
+// resolved at runtime via the web app's managed identity. Kept in a dedicated
+// 'appsettings' resource so it can depend on the role assignment + secrets
+// existing first (otherwise the references would fail to resolve on first run).
+resource webAppSettings 'Microsoft.Web/sites/config@2023-12-01' = {
+  parent: webApp
+  name: 'appsettings'
+  properties: {
+    NODE_ENV: 'production'
+    PORT: '8080'
+    WEBSITES_PORT: '8080'
+    SCM_DO_BUILD_DURING_DEPLOYMENT: 'false'
+    ADMIN_EMAILS: adminEmails
+    VAPID_PUBLIC_KEY: vapidPublicKey
+    VAPID_SUBJECT: vapidSubject
+    SQL_CONNECTION_STRING: '@Microsoft.KeyVault(SecretUri=${kvSecretsBase}/sql-connection-string/)'
+    GOOGLE_PROVIDER_AUTHENTICATION_SECRET: '@Microsoft.KeyVault(SecretUri=${kvSecretsBase}/google-auth-secret/)'
+    MICROSOFT_PROVIDER_AUTHENTICATION_SECRET: '@Microsoft.KeyVault(SecretUri=${kvSecretsBase}/microsoft-auth-secret/)'
+    VAPID_PRIVATE_KEY: '@Microsoft.KeyVault(SecretUri=${kvSecretsBase}/vapid-private-key/)'
+  }
+  dependsOn: [
+    secretsRoleAssignment
+    sqlConnSecret
+    googleAuthSecret
+    microsoftAuthSecret
+    vapidPrivateSecret
+  ]
 }
 
 // Azure App Service "Easy Auth" — handles Google & Microsoft OAuth in front of
@@ -166,6 +176,9 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
 resource authSettings 'Microsoft.Web/sites/config@2023-12-01' = {
   parent: webApp
   name: 'authsettingsV2'
+  dependsOn: [
+    webAppSettings
+  ]
   properties: {
     platform: {
       enabled: true
@@ -215,3 +228,67 @@ output webAppName string = webApp.name
 output webAppUrl string = 'https://${webApp.properties.defaultHostName}'
 output sqlServerFqdn string = sqlServer.properties.fullyQualifiedDomainName
 output sqlDatabaseName string = sqlDbName
+output keyVaultName string = keyVault.name
+
+// ----- Key Vault for application secrets -----
+// RBAC-authorised vault. The web app's managed identity is granted
+// "Key Vault Secrets User" so it can resolve the @Microsoft.KeyVault(...)
+// references in app settings. NB: whoever runs this deployment needs a
+// data-plane role (e.g. "Key Vault Secrets Officer") to write the secrets.
+resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
+  name: keyVaultName
+  location: location
+  properties: {
+    sku: {
+      family: 'A'
+      name: 'standard'
+    }
+    tenantId: subscription().tenantId
+    enableRbacAuthorization: true
+  }
+}
+
+resource sqlConnSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: keyVault
+  name: 'sql-connection-string'
+  properties: {
+    value: sqlConnectionString
+  }
+}
+
+resource googleAuthSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: keyVault
+  name: 'google-auth-secret'
+  properties: {
+    value: googleClientSecret
+  }
+}
+
+resource microsoftAuthSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: keyVault
+  name: 'microsoft-auth-secret'
+  properties: {
+    value: microsoftClientSecret
+  }
+}
+
+resource vapidPrivateSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: keyVault
+  name: 'vapid-private-key'
+  properties: {
+    value: vapidPrivateKey
+  }
+}
+
+// Built-in role: Key Vault Secrets User (read secret values).
+var kvSecretsUserRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
+
+resource secretsRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(keyVault.id, webApp.id, kvSecretsUserRoleId)
+  scope: keyVault
+  properties: {
+    roleDefinitionId: kvSecretsUserRoleId
+    principalId: webApp.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}

@@ -107,13 +107,13 @@ describe("resolvePrincipal", () => {
 describe("canWrite", () => {
   const player: Principal = { email: "player@gmail.com", name: "P", provider: "google" };
 
-  it("allows any signed-in user when allow-list is empty", () => {
+  it("allows any signed-in user", () => {
     expect(canWrite(player, [])).toBe(true);
   });
 
-  it("allows only allow-listed users when configured", () => {
+  it("allows any signed-in user regardless of the allow-list", () => {
     expect(canWrite(player, ["player@gmail.com"])).toBe(true);
-    expect(canWrite(player, ["boss@outlook.com"])).toBe(false);
+    expect(canWrite(player, ["boss@outlook.com"])).toBe(true);
   });
 
   it("denies a null principal", () => {
@@ -133,16 +133,13 @@ describe("evaluateWriteAccess", () => {
     if (r.ok) expect(r.principal.email).toBe("player@gmail.com");
   });
 
-  it("403s a signed-in user who is not allow-listed", () => {
+  it("allows any signed-in user even when an allow-list is set", () => {
     const r = evaluateWriteAccess(encodePrincipal(googlePrincipal), {
       ...baseOpts,
       adminEmails: ["boss@outlook.com"],
     });
-    expect(r).toEqual({
-      ok: false,
-      status: 403,
-      error: "Your account is not permitted to make changes",
-    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.principal.email).toBe("player@gmail.com");
   });
 
   it("allows an allow-listed user", () => {

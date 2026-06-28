@@ -40,8 +40,20 @@ export function parsePrincipalHeader(header: string | undefined): Principal | nu
     const claims: { typ: string; val: string }[] = parsed.claims || [];
     const find = (...types: string[]) => claims.find((c) => types.includes(c.typ))?.val;
     const email =
-      find("preferred_username", "email", "emails", "upn") || parsed.userDetails || "";
-    const name = find("name") || parsed.userDetails || email;
+      find(
+        "preferred_username",
+        "email",
+        "emails",
+        "upn",
+        // Easy Auth runtime ~1 emits email/name under the long WS-Fed claim URIs.
+        "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress",
+      ) ||
+      parsed.userDetails ||
+      "";
+    const name =
+      find("name", "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name") ||
+      parsed.userDetails ||
+      email;
     if (!email) return null;
     return {
       email: String(email).toLowerCase(),
@@ -69,10 +81,15 @@ export function resolvePrincipal(
   return null;
 }
 
-/** Whether a principal is allowed to perform writes. */
-export function canWrite(principal: Principal | null, adminEmails: string[]): boolean {
-  if (!principal || !principal.email) return false;
-  return adminEmails.length === 0 || adminEmails.includes(principal.email);
+/**
+ * Whether a principal is allowed to perform writes.
+ *
+ * Policy: every signed-in account is an admin and may change anything. The
+ * `adminEmails` allow-list is retained for backwards compatibility but no
+ * longer restricts access.
+ */
+export function canWrite(principal: Principal | null, _adminEmails: string[]): boolean {
+  return !!(principal && principal.email);
 }
 
 export type AccessResult =

@@ -76,8 +76,8 @@ export default function BanterBox() {
   return (
     <div className="banter">
       <div className="banter-head">
-        <h3 className="banter-title">🗣️ Club Banter</h3>
-        <span className="banter-sub">Trash talk, table calls and bad-beat stories.</span>
+        <h3 className="banter-title">🗣️ Bants</h3>
+        <span className="banter-sub">"That's what she said", Beadle's hand, et cetera.</span>
       </div>
 
       <div className="banter-thread" ref={threadRef}>
@@ -124,7 +124,7 @@ export default function BanterBox() {
           </button>
         </form>
       ) : (
-        <p className="banter-signin">Sign in on the Score Keeper page to join the banter.</p>
+        <p className="banter-signin">Sign in on the Trophy Room page to join the banter.</p>
       )}
     </div>
   );

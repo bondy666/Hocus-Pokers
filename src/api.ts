@@ -67,6 +67,7 @@ export interface NewMember {
   location?: string;
   email?: string;
   joined?: number;
+  games?: number;
 }
 
 export const createMember = (body: NewMember) =>
@@ -113,11 +114,28 @@ export interface NewTournament {
 export const createTournament = (body: NewTournament) =>
   postJson<{ id: number }>("/api/tournaments", body);
 
+// Clone a tournament into a new "game" on the same night, copying its roster.
+export const cloneTournament = (id: string) =>
+  postJson<{ id: number }>(`/api/tournaments/${id}/clone`, {});
+
 export const updateTournament = (id: string, body: NewTournament) =>
   sendJson<{ id: number }>("PUT", `/api/tournaments/${id}`, body);
 
 export const deleteTournament = (id: string) =>
   sendJson<{ ok: boolean }>("DELETE", `/api/tournaments/${id}`);
+
+// ----- confirmed players (tournament roster) -----
+
+export const confirmPlayer = (tournamentId: string, userId: string) =>
+  postJson<{ ok: boolean }>(`/api/tournaments/${tournamentId}/confirmations`, {
+    userId: Number(userId),
+  });
+
+export const unconfirmPlayer = (tournamentId: string, userId: string) =>
+  sendJson<{ ok: boolean }>(
+    "DELETE",
+    `/api/tournaments/${tournamentId}/confirmations/${userId}`
+  );
 
 export interface NewResult {
   userId: number;
@@ -330,19 +348,74 @@ export type AuthProvider = "google" | "aad";
 
 const POST_LOGIN_REDIRECT = encodeURIComponent("/admin");
 
+// Force an interactive account picker. Easy Auth forwards this query param to
+// the IdP; for Google it prevents a silent `prompt=none` refresh, which would
+// otherwise return `interaction_required` and surface as an HTTP 401.
+const loginPrompt: Record<AuthProvider, string> = {
+  google: "select_account",
+  aad: "select_account",
+};
+
 export const loginUrl = (provider: AuthProvider): string =>
-  `${API_BASE}/.auth/login/${provider}?post_login_redirect_uri=${POST_LOGIN_REDIRECT}`;
+  `${API_BASE}/.auth/login/${provider}?prompt=${loginPrompt[provider]}&post_login_redirect_uri=${POST_LOGIN_REDIRECT}`;
 
 export const logoutUrl = (): string =>
   `${API_BASE}/.auth/logout?post_logout_redirect_uri=${encodeURIComponent("/")}`;
 
-interface EasyAuthMe {
+type AuthClaim = { typ: string; val: string };
+
+// Easy Auth /.auth/me has two shapes depending on the platform runtime version:
+//  - v2 (~2): { clientPrincipal: { userDetails, identityProvider, claims } }
+//  - v1 (~1): [ { user_id, provider_name, user_claims: [{ typ, val }] } ]
+// This app's App Service runs runtimeVersion ~1, so we must handle both.
+interface EasyAuthMeV2 {
   clientPrincipal?: {
     userDetails?: string;
     identityProvider?: string;
     userRoles?: string[];
-    claims?: { typ: string; val: string }[];
+    claims?: AuthClaim[];
   } | null;
+}
+
+interface EasyAuthMeV1Entry {
+  user_id?: string;
+  provider_name?: string;
+  user_claims?: AuthClaim[];
+}
+
+const EMAIL_CLAIM =
+  "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress";
+
+function parseEasyAuthMe(
+  data: EasyAuthMeV2 | EasyAuthMeV1Entry[],
+): CurrentUser | null {
+  // v1 legacy array shape
+  if (Array.isArray(data)) {
+    const entry = data[0];
+    if (!entry) return null;
+    const claim = (t: string) =>
+      entry.user_claims?.find((c) => c.typ === t)?.val;
+    const email = (claim(EMAIL_CLAIM) || entry.user_id || "").toLowerCase();
+    if (!email) return null;
+    return {
+      email,
+      name: claim("name") || email,
+      provider: entry.provider_name || "unknown",
+      canWrite: true,
+    };
+  }
+  // v2 shape
+  const p = data.clientPrincipal;
+  if (p && p.userDetails) {
+    const claim = (t: string) => p.claims?.find((c) => c.typ === t)?.val;
+    return {
+      email: (p.userDetails || "").toLowerCase(),
+      name: claim("name") || p.userDetails || "",
+      provider: p.identityProvider || "unknown",
+      canWrite: true,
+    };
+  }
+  return null;
 }
 
 // Resolve the signed-in user. Tries Easy Auth's /.auth/me (production) first,
@@ -351,17 +424,9 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
   try {
     const res = await fetch(`${API_BASE}/.auth/me`, { credentials: "include" });
     if (res.ok) {
-      const data = (await res.json()) as EasyAuthMe;
-      const p = data.clientPrincipal;
-      if (p && p.userDetails) {
-        const claim = (t: string) => p.claims?.find((c) => c.typ === t)?.val;
-        return {
-          email: (p.userDetails || "").toLowerCase(),
-          name: claim("name") || p.userDetails || "",
-          provider: p.identityProvider || "unknown",
-          canWrite: true,
-        };
-      }
+      const data = (await res.json()) as EasyAuthMeV2 | EasyAuthMeV1Entry[];
+      const user = parseEasyAuthMe(data);
+      if (user) return user;
     }
   } catch {
     // ignore — fall through to /api/me
@@ -404,3 +469,6 @@ export const savePushSubscription = (subscription: PushSubscriptionJSON) =>
 
 export const removePushSubscription = (endpoint: string) =>
   postJson<{ ok: boolean }>("/api/push/unsubscribe", { endpoint });
+
+export const sendTestPush = (endpoint: string) =>
+  postJson<{ ok: boolean }>("/api/push/test", { endpoint });

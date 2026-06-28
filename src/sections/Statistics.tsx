@@ -82,7 +82,7 @@ function buildFallback(members: Member[], tournaments: Tournament[]): ClubStats 
 
   const totalBuyIn = players.reduce((s, p) => s + p.totalBuyIn, 0);
   const totalCashOut = players.reduce((s, p) => s + p.totalCashOut, 0);
-  const best = [...members].sort((a, b) => b.netPnl - a.netPnl)[0];
+  const topWinner = [...players].sort((a, b) => b.net - a.net)[0];
 
   return {
     players,
@@ -96,8 +96,8 @@ function buildFallback(members: Member[], tournaments: Tournament[]): ClubStats 
       totalBuyIn,
       totalCashOut,
       totalNet: totalCashOut - totalBuyIn,
-      tournaments: tournaments.length,
-      biggestWin: best ? { name: best.name, amount: best.netPnl } : null,
+      tournaments: new Set(tournaments.map((t) => t.date)).size,
+      biggestWin: topWinner ? { name: topWinner.name, amount: topWinner.net } : null,
     },
   };
 }
@@ -162,6 +162,9 @@ export default function Statistics() {
         <p className="section-sub">
           Career P&amp;L, buy-ins, finishes and yearly standings across the felt.
         </p>
+        <p className="section-sub">
+          All monetary stats are recorded from game 42 onwards. No historical data prior to this.
+        </p>
 
         {loading && <p className="stats-loading">Crunching the numbers…</p>}
 
@@ -175,7 +178,7 @@ export default function Statistics() {
                 value={String(stats.totals.tournaments)}
               />
               <SummaryCard
-                label="Biggest career stack"
+                label="Career winnings"
                 value={
                   stats.totals.biggestWin
                     ? `${stats.totals.biggestWin.name.split(" ")[0]} · ${gbp(
@@ -187,12 +190,12 @@ export default function Statistics() {
             </div>
 
             <div className="stats-block">
-              <h3 className="stats-heading">Career stacks</h3>
+              <h3 className="stats-heading">Career earnings</h3>
               <p className="stats-note">
                 Each player's career net. Black bars are in profit, red bars are down.
               </p>
               {clubBars.length > 0 ? (
-                <BarChart items={clubBars} yMax={10000} />
+                <BarChart items={clubBars} yMax={5000} />
               ) : (
                 <p className="stats-note">No player results yet.</p>
               )}
@@ -204,7 +207,7 @@ export default function Statistics() {
                 Cumulative net P&amp;L per player. Tap a name to show or hide their line.
               </p>
               {stats.timeline.series.length > 0 && labels.length > 0 ? (
-                <LineChart labels={labels} series={stats.timeline.series} />
+                <LineChart labels={labels} series={stats.timeline.series} yMin={-5000} yMax={5000} />
               ) : (
                 <p className="stats-note">Not enough completed tournaments yet.</p>
               )}
@@ -240,7 +243,7 @@ export default function Statistics() {
                         <td className={`num ${pnlClass(p.net)}`}>{gbp(p.net)}</td>
                         <td className="num">{gbp(p.totalBuyIn)}</td>
                         <td className="num">{gbp(p.totalCashOut)}</td>
-                        <td className="num">{p.games}</td>
+                        <td className="num">0</td>
                         <td className="num">{p.firsts}</td>
                         <td className="num">{p.seconds}</td>
                         <td className="num">{p.thirds}</td>
