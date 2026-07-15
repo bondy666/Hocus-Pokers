@@ -1,7 +1,7 @@
 # Hocus Pokers 🂡
 
 A card-room–themed **members club stats tracker** for the *Hocus Pokers* poker club
-of Horsham, West Sussex. It keeps tally of live-tournament stats — career
+of Ealing, London. It keeps tally of live-tournament stats — career
 earnings/losses, wins, games played, venues and trophies — rather than playing
 poker itself.
 
@@ -10,7 +10,7 @@ Built on the same stack as the club's sibling WhiskyClub site:
 
 ## Sections
 
-1. **Hero** — club name, founding location (Horsham) and four headline stats
+1. **Hero** — club name, founding location (Ealing) and four headline stats
    (members, tournaments, prize pool, years running).
 2. **Leaderboard** — career net P&L on a felt-green table, colour-coded green/red,
    with wins and games played. The table leader gets a gold highlight.
