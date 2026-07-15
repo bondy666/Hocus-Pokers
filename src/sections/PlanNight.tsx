@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useClub } from "../ClubContext.ts";
+import type { Member } from "../data.ts";
 import {
   getPlanning,
   proposeDate,
@@ -24,8 +25,37 @@ const prettyDate = (s: string) =>
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
+const MONTHS = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+const NAME_ADJECTIVES = [
+  "Midnight", "High Roller", "Felt", "Riverboat", "Aces High", "Full House",
+  "Royal", "Bounty", "Deepstack", "Big Blind", "Last Longer", "All-In",
+  "Pocket Rockets", "Chip Leader", "Dead Man's Hand", "Nut Flush",
+];
+
+const NAME_NOUNS = [
+  "Freezeout", "Showdown", "Shootout", "Classic", "Brawl", "Rumble",
+  "Throwdown", "Special", "Series", "Invitational", "Bonanza", "Bash",
+  "Clash", "Deepstack", "Knockout",
+];
+
+const pick = <T,>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
+
+function randomTournamentName(dateStr: string): string {
+  const month = MONTHS[new Date(dateStr).getMonth()];
+  const patterns = [
+    () => `${month} ${pick(NAME_NOUNS)}`,
+    () => `${pick(NAME_ADJECTIVES)} ${pick(NAME_NOUNS)}`,
+    () => `The ${pick(NAME_ADJECTIVES)} ${pick(NAME_NOUNS)}`,
+  ];
+  return pick(patterns)();
+}
+
 export default function PlanNight() {
-  const { user, authChecked, refresh, source } = useClub();
+  const { user, authChecked, refresh, source, members } = useClub();
   const navigate = useNavigate();
   const canWrite = user?.canWrite !== false && !!user;
 
@@ -81,6 +111,23 @@ export default function PlanNight() {
 
   const monthLabel = first.toLocaleDateString("en-GB", { month: "long", year: "numeric" });
   const todayIso = iso(today);
+
+  const planUrl = "https://hocuspokers.com/plan";
+  const whatsappShareUrl = useMemo(() => {
+    const lines = ["🃏 Time to plan the next poker night!"];
+    if (sorted.length > 0) {
+      lines.push("", "Proposed dates so far:");
+      for (const d of sorted) {
+        lines.push(
+          `• ${prettyDate(d.date)} — ${d.voteCount} ${d.voteCount === 1 ? "vote" : "votes"}`
+        );
+      }
+    } else {
+      lines.push("", "No dates proposed yet — get in first!");
+    }
+    lines.push("", `Propose dates and vote here: ${planUrl}`);
+    return `https://wa.me/?text=${encodeURIComponent(lines.join("\n"))}`;
+  }, [sorted, planUrl]);
 
   const move = (delta: number) =>
     setCursor((c) => {
@@ -144,6 +191,17 @@ export default function PlanNight() {
         <p className="section-sub">
           Propose dates, vote for the ones you can make, then lock in the tournament.
         </p>
+
+        <div className="plan-share">
+          <a
+            className="btn-whatsapp"
+            href={whatsappShareUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <span aria-hidden="true">💬</span> Share on WhatsApp
+          </a>
+        </div>
 
         {source === "seed" && (
           <p className="admin-banner">
@@ -232,6 +290,7 @@ export default function PlanNight() {
                 <PlanDateCard
                   key={d.id}
                   d={d}
+                  members={members}
                   isLeader={leader?.id === d.id}
                   canWrite={canWrite}
                   busy={busy === d.id}
@@ -263,6 +322,7 @@ export default function PlanNight() {
 
 interface CardProps {
   d: PlanningDate;
+  members: Member[];
   isLeader: boolean;
   canWrite: boolean;
   busy: boolean;
@@ -271,10 +331,16 @@ interface CardProps {
   onSetup: (name: string, venue: string) => void;
 }
 
-function PlanDateCard({ d, isLeader, canWrite, busy, onVote, onRemove, onSetup }: CardProps) {
+function PlanDateCard({ d, members, isLeader, canWrite, busy, onVote, onRemove, onSetup }: CardProps) {
   const [setup, setSetup] = useState(false);
-  const [name, setName] = useState("");
+  const [name, setName] = useState(() => randomTournamentName(d.date));
   const [venue, setVenue] = useState("The Card Room, Ealing");
+
+  const handleMemberSelect = (memberId: string) => {
+    if (!memberId) return;
+    const member = members.find((m) => m.id === memberId);
+    if (member) setVenue(member.location || member.name);
+  };
 
   return (
     <div className={`plan-card ${isLeader ? "leader" : ""}`}>
@@ -319,15 +385,43 @@ function PlanDateCard({ d, isLeader, canWrite, busy, onVote, onRemove, onSetup }
             <div className="plan-setup">
               <label>
                 Tournament name
-                <input
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="e.g. August Freezeout"
-                />
+                <div className="plan-name-row">
+                  <input
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="e.g. August Freezeout"
+                  />
+                  <button
+                    type="button"
+                    className="btn-ghost"
+                    title="Suggest another name"
+                    onClick={() => setName(randomTournamentName(d.date))}
+                  >
+                    🎲
+                  </button>
+                </div>
               </label>
               <label>
                 Venue
                 <input value={venue} onChange={(e) => setVenue(e.target.value)} />
+              </label>
+              <label>
+                Or use a member's address
+                <select
+                  defaultValue=""
+                  onChange={(e) => {
+                    handleMemberSelect(e.target.value);
+                    e.target.value = "";
+                  }}
+                >
+                  <option value="">Select a member…</option>
+                  {members.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                      {m.location ? ` — ${m.location}` : ""}
+                    </option>
+                  ))}
+                </select>
               </label>
               <p className="plan-setup-note">
                 {d.voters.length} player{d.voters.length === 1 ? "" : "s"} agreed they can make it.

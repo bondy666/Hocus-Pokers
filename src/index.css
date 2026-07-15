@@ -1333,6 +1333,31 @@ a {
 }
 
 /* ---------- plan night ---------- */
+.plan-share {
+  display: flex;
+  justify-content: center;
+  margin: 0 auto 1.6rem;
+}
+
+.btn-whatsapp {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1.2rem;
+  background: #25d366;
+  color: #0b141a;
+  font-weight: 700;
+  font-size: 0.9rem;
+  border-radius: var(--radius);
+  text-decoration: none;
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+
+.btn-whatsapp:hover {
+  background: #1ebe5b;
+  transform: translateY(-1px);
+}
+
 .plan-leader {
   display: flex;
   align-items: center;
@@ -1627,7 +1652,8 @@ a {
   color: var(--ink-700);
 }
 
-.plan-setup input {
+.plan-setup input,
+.plan-setup select {
   font-family: inherit;
   font-size: 0.9rem;
   font-weight: 400;
@@ -1640,6 +1666,23 @@ a {
   background: #fff;
   width: 100%;
   min-width: 0;
+}
+
+.plan-name-row {
+  display: flex;
+  gap: 0.4rem;
+  align-items: stretch;
+}
+
+.plan-name-row input {
+  flex: 1 1 auto;
+}
+
+.plan-name-row .btn-ghost {
+  flex: 0 0 auto;
+  padding: 0.45rem 0.6rem;
+  font-size: 1rem;
+  line-height: 1;
 }
 
 .plan-setup-note {

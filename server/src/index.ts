@@ -6,8 +6,9 @@ import fs from "fs";
 import crypto from "crypto";
 import multer from "multer";
 import heicConvert from "heic-convert";
-import { fromFile as fileTypeFromFile } from "file-type";
+import { fromBuffer as fileTypeFromBuffer } from "file-type";
 import webpush from "web-push";
+import { saveUpload, openUpload, deleteUpload } from "./storage";
 import { getPool, sql, sqlConfigured } from "./db/sql";
 import {
   parseEmailList,
@@ -53,19 +54,9 @@ const usingDb = sqlConfigured;
 
 // ----- photo uploads -----
 //
-// Tournament-night photos are stored on the App Service persistent volume
-// (/home is durable on Linux App Service) with metadata kept in SQL. Override
-// the base directory with UPLOAD_DIR if needed.
-const uploadDir =
-  process.env.UPLOAD_DIR ||
-  (process.env.HOME ? path.join(process.env.HOME, "data", "uploads") : path.join(process.cwd(), "uploads"));
-
-try {
-  fs.mkdirSync(uploadDir, { recursive: true });
-} catch (err) {
-  console.error("Could not create upload directory", uploadDir, err);
-}
-
+// Uploads (tournament photos + member avatars) are stored in Azure Blob Storage
+// via the storage module so they survive restarts, redeploys and app
+// recreation. Files are buffered in memory here, validated, then persisted.
 const ALLOWED_IMAGE_TYPES = new Set([
   "image/jpeg",
   "image/png",
@@ -75,14 +66,14 @@ const ALLOWED_IMAGE_TYPES = new Set([
   "image/heif",
 ]);
 
+// Generate a unique, safe stored name for an uploaded file.
+function generateStoredName(originalname: string): string {
+  const ext = path.extname(originalname || "").toLowerCase().slice(0, 10) || "";
+  return `${Date.now()}-${crypto.randomBytes(8).toString("hex")}${ext}`;
+}
+
 const upload = multer({
-  storage: multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, uploadDir),
-    filename: (_req, file, cb) => {
-      const ext = path.extname(file.originalname).toLowerCase().slice(0, 10) || "";
-      cb(null, `${Date.now()}-${crypto.randomBytes(8).toString("hex")}${ext}`);
-    },
-  }),
+  storage: multer.memoryStorage(),
   limits: { fileSize: 12 * 1024 * 1024, files: 10 },
   fileFilter: (_req, file, cb) => {
     cb(null, ALLOWED_IMAGE_TYPES.has(file.mimetype));
@@ -91,30 +82,26 @@ const upload = multer({
 
 // iPhones upload photos as HEIC/HEIF, which iOS Safari renders fine but desktop
 // browsers (Chrome, Edge, Firefox) cannot display. Convert any HEIC/HEIF upload
-// to JPEG on disk so the image shows everywhere. Mutates the multer file in
-// place (filename / mimetype / path) and returns it; non-HEIC files pass
-// through untouched.
+// to JPEG so the image shows everywhere. Also assigns the file's stored name.
+// Mutates the multer file in place (buffer / filename / mimetype) and returns
+// it; non-HEIC files pass through with just a stored name assigned.
 async function normalizeUploadedImage(
   file: Express.Multer.File
 ): Promise<Express.Multer.File> {
+  if (!file.filename) file.filename = generateStoredName(file.originalname);
   const isHeic =
     file.mimetype === "image/heic" ||
     file.mimetype === "image/heif" ||
     /\.(heic|heif)$/i.test(file.originalname || file.filename);
   if (!isHeic) return file;
 
-  const sourcePath = path.join(uploadDir, file.filename);
   try {
-    const input = await fs.promises.readFile(sourcePath);
-    const output = await heicConvert({ buffer: input, format: "JPEG", quality: 0.9 });
-    const newFilename = file.filename.replace(/\.[^.]*$/, "") + ".jpg";
-    await fs.promises.writeFile(path.join(uploadDir, newFilename), Buffer.from(output));
-    await fs.promises.unlink(sourcePath).catch(() => {});
-    file.filename = newFilename;
-    file.path = path.join(uploadDir, newFilename);
+    const output = await heicConvert({ buffer: file.buffer, format: "JPEG", quality: 0.9 });
+    file.buffer = Buffer.from(output);
+    file.filename = file.filename.replace(/\.[^.]*$/, "") + ".jpg";
     file.mimetype = "image/jpeg";
   } catch (err) {
-    console.error("HEIC conversion failed for", file.filename, err);
+    console.error("HEIC conversion failed for", file.originalname, err);
   }
   return file;
 }
@@ -126,17 +113,14 @@ async function verifyImageMagicBytes(
   file: Express.Multer.File,
   res: express.Response
 ): Promise<boolean> {
-  const filePath = path.join(uploadDir, file.filename);
   try {
-    const detected = await fileTypeFromFile(filePath);
+    const detected = await fileTypeFromBuffer(file.buffer);
     if (!detected || !ALLOWED_IMAGE_TYPES.has(detected.mime)) {
-      await fs.promises.unlink(filePath).catch(() => {});
       res.status(400).json({ error: "The uploaded file is not a valid image." });
       return false;
     }
     return true;
   } catch {
-    await fs.promises.unlink(filePath).catch(() => {});
     res.status(400).json({ error: "Could not verify the uploaded file." });
     return false;
   }
@@ -946,11 +930,11 @@ app.get("/api/members/:id/avatar", async (req, res) => {
       return res.status(404).end();
     }
     const row = result.recordset[0];
-    const filePath = path.join(uploadDir, row.avatar);
-    if (!fs.existsSync(filePath)) return res.status(404).end();
+    const opened = await openUpload(row.avatar);
+    if (!opened) return res.status(404).end();
     if (row.avatar_type) res.type(row.avatar_type);
     res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-    fs.createReadStream(filePath).pipe(res);
+    opened.stream.pipe(res);
   } catch (err: any) {
     serverError(res, "Failed to load avatar", err);
   }
@@ -988,9 +972,9 @@ app.post("/api/members/:id/avatar", (req, res) => {
         .input("Id", sql.Int, id)
         .query(`SELECT avatar FROM dbo.users WHERE id = @Id`);
       if (prev.recordset.length === 0) {
-        fs.promises.unlink(path.join(uploadDir, file.filename)).catch(() => {});
         return res.status(404).json({ error: "Member not found" });
       }
+      await saveUpload(file.filename, file.buffer, file.mimetype);
       await pool
         .request()
         .input("Id", sql.Int, id)
@@ -999,7 +983,7 @@ app.post("/api/members/:id/avatar", (req, res) => {
         .query(`UPDATE dbo.users SET avatar = @Avatar, avatar_type = @AvatarType WHERE id = @Id`);
       const oldAvatar = prev.recordset[0].avatar;
       if (oldAvatar && oldAvatar !== file.filename) {
-        fs.promises.unlink(path.join(uploadDir, oldAvatar)).catch(() => {});
+        deleteUpload(oldAvatar).catch(() => {});
       }
       res.status(201).json({
         ok: true,
@@ -1284,11 +1268,11 @@ app.get("/api/photos/:id/file", async (req, res) => {
       .query(`SELECT filename, content_type FROM dbo.tournament_photos WHERE id = @Id`);
     if (result.recordset.length === 0) return res.status(404).end();
     const row = result.recordset[0];
-    const filePath = path.join(uploadDir, row.filename);
-    if (!fs.existsSync(filePath)) return res.status(404).end();
+    const opened = await openUpload(row.filename);
+    if (!opened) return res.status(404).end();
     if (row.content_type) res.type(row.content_type);
     res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-    fs.createReadStream(filePath).pipe(res);
+    opened.stream.pipe(res);
   } catch (err: any) {
     serverError(res, "Failed to load photo", err);
   }
@@ -1322,6 +1306,7 @@ app.post("/api/tournaments/:id/photos", (req, res) => {
       for (const f of files) {
         if (!await verifyImageMagicBytes(f, res)) return;
         await normalizeUploadedImage(f);
+        await saveUpload(f.filename, f.buffer, f.mimetype);
         const result = await pool
           .request()
           .input("TournamentId", sql.Int, tournamentId)
@@ -1361,8 +1346,7 @@ app.delete("/api/photos/:id", async (req, res) => {
     if (del.recordset.length === 0) {
       return res.status(404).json({ error: "Photo not found" });
     }
-    const filePath = path.join(uploadDir, del.recordset[0].filename);
-    fs.promises.unlink(filePath).catch(() => {});
+    deleteUpload(del.recordset[0].filename).catch(() => {});
     res.json({ ok: true, id });
   } catch (err: any) {
     serverError(res, "Failed to delete photo", err);
