@@ -346,8 +346,6 @@ export interface CurrentUser {
 
 export type AuthProvider = "google" | "aad";
 
-const POST_LOGIN_REDIRECT = encodeURIComponent("/admin");
-
 // Force an interactive account picker. Easy Auth forwards this query param to
 // the IdP; for Google it prevents a silent `prompt=none` refresh, which would
 // otherwise return `interaction_required` and surface as an HTTP 401.
@@ -356,8 +354,10 @@ const loginPrompt: Record<AuthProvider, string> = {
   aad: "select_account",
 };
 
-export const loginUrl = (provider: AuthProvider): string =>
-  `${API_BASE}/.auth/login/${provider}?prompt=${loginPrompt[provider]}&post_login_redirect_uri=${POST_LOGIN_REDIRECT}`;
+// Where to land after a successful sign-in. Defaults to /admin, but callers can
+// pass a different app path (e.g. "/plan") so users return to where they were.
+export const loginUrl = (provider: AuthProvider, redirectTo: string = "/admin"): string =>
+  `${API_BASE}/.auth/login/${provider}?prompt=${loginPrompt[provider]}&post_login_redirect_uri=${encodeURIComponent(redirectTo)}`;
 
 export const logoutUrl = (): string =>
   `${API_BASE}/.auth/logout?post_logout_redirect_uri=${encodeURIComponent("/")}`;

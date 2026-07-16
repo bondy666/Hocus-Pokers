@@ -157,7 +157,7 @@ export default function PlanNight() {
 
   const handleVote = async (id: number) => {
     if (!user) {
-      window.location.href = loginUrl("aad");
+      window.location.href = loginUrl("aad", "/plan");
       return;
     }
     try {
@@ -211,7 +211,7 @@ export default function PlanNight() {
 
         {authChecked && !user && (
           <p className="admin-banner">
-            🔑 <a className="inline-link" href={loginUrl("aad")}>Sign in</a> to propose dates and vote.
+            🔑 <a className="inline-link" href={loginUrl("aad", "/plan")}>Sign in</a> to propose dates and vote.
           </p>
         )}
 
