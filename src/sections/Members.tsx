@@ -1,6 +1,6 @@
 import { useState, useRef, type FormEvent, type ChangeEvent } from "react";
 import { Link } from "react-router-dom";
-import { gbp, winRate, type Member } from "../data.ts";
+import { winRate, type Member } from "../data.ts";
 import { useClub } from "../ClubContext.ts";
 import {
   createMember,
@@ -164,9 +164,6 @@ function MemberCard({
             </p>
             {member.email && <p className="member-email">✉ {member.email}</p>}
           </div>
-        </div>
-        <div className={`member-pnl ${member.netPnl >= 0 ? "pos" : "neg"}`}>
-          {gbp(member.netPnl)}
         </div>
       </header>
 

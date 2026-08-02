@@ -381,9 +381,11 @@ function TournamentRow({
           <button className="btn-ghost" onClick={() => setEditing(true)} disabled={busy}>
             Edit
           </button>
-          <button className="btn-danger" onClick={remove} disabled={busy}>
-            Delete
-          </button>
+          {tournament.status !== "complete" && (
+            <button className="btn-danger" onClick={remove} disabled={busy}>
+              Delete
+            </button>
+          )}
         </div>
       </div>
       {showResults && <ResultsPanel tournamentId={tournament.id} refresh={refresh} />}

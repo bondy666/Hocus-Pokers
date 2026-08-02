@@ -378,7 +378,7 @@ function PlanDateCard({ d, members, isLeader, canWrite, busy, onVote, onRemove, 
                 Set up tournament
               </button>
               <button type="button" className="btn-danger" onClick={onRemove} disabled={busy}>
-                Remove
+                Remove (HOST ONLY)
               </button>
             </>
           ) : (

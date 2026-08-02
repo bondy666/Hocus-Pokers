@@ -158,7 +158,7 @@ export default function Statistics() {
   return (
     <section className="section" id="stats">
       <div className="section-inner">
-        <h2 className="section-title">Club Statistics</h2>
+        <h2 className="section-title">The Cage</h2>
         <p className="section-sub">
           Career P&amp;L, buy-ins, finishes and yearly standings across the felt.
         </p>

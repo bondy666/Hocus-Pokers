@@ -416,21 +416,6 @@ a {
   color: var(--ink-700);
 }
 
-.member-pnl {
-  font-family: "Cinzel", serif;
-  font-weight: 700;
-  font-size: 1.15rem;
-  white-space: nowrap;
-}
-
-.member-pnl.pos {
-  color: var(--green-pos);
-}
-
-.member-pnl.neg {
-  color: var(--red-card);
-}
-
 .member-stats {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

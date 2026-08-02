@@ -30,7 +30,7 @@ const nav = [
   { to: "/members", label: "Members" },
   { to: "/tournaments", label: "Tournaments" },
   { to: "/plan", label: "Plan Night" },
-  { to: "/stats", label: "Club Stats" },
+  { to: "/stats", label: "The Cage" },
   { to: "/halloffame", label: "Hall of Fame" },
   { to: "/cardroom", label: "Card Room" },
   { to: "/rules", label: "House Rules" },
@@ -104,7 +104,7 @@ function Layout() {
           {CLUB.name} · {CLUB.location} · Established {CLUB.foundedYear}
         </p>
         <p className="footer-fine">
-          Members club stats tracker. Please gamble responsibly — and tip your dealer.
+          Members club stats tracker. Please gamble responsibly.
         </p>
       </footer>
     </div>

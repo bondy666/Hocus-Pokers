@@ -609,7 +609,7 @@ export default function Tournaments() {
                       {!nightIsOver(t.date) && (
                         <NewGameButton id={t.id} refresh={refresh} />
                       )}
-                      {!nightIsOver(t.date) && (
+                      {!nightIsOver(t.date) && t.status !== "complete" && (
                         <DeleteButton id={t.id} name={t.name} refresh={refresh} />
                       )}
                     </div>
