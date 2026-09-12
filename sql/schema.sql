@@ -140,7 +140,14 @@ SELECT
     u.name,
     u.nickname,
     u.location,
-    ISNULL(SUM(r.net), 0)                                AS net_pnl,
+    -- Money P&L reflects EVERY game and every bullet a player has fired
+    -- (second games and rebuys included), independent of the trophy-game
+    -- filter used for standings below.
+    ISNULL((
+        SELECT SUM(r2.net)
+        FROM dbo.tournament_results r2
+        WHERE r2.user_id = u.id
+    ), 0)                                               AS net_pnl,
     COUNT(r.id)                                          AS games,
     -- Wins come from the recorded winner of each trophy game so the count
     -- includes historical games that have no per-result rows.

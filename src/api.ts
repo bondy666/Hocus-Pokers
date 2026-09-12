@@ -190,6 +190,7 @@ export const deleteTrophy = (id: string) =>
 export interface PlanningVoter {
   email: string;
   name: string;
+  userId?: string;
 }
 
 export interface PlanningDate {
@@ -199,6 +200,10 @@ export interface PlanningDate {
   voteCount: number;
   voters: PlanningVoter[];
   votedByMe: boolean;
+  locked?: boolean; // date is locked in as the next tournament night
+  name?: string; // agreed tournament name (once locked)
+  venue?: string; // agreed venue (once locked)
+  host?: string; // hosting member's name (once locked, if a member's address is used)
 }
 
 export const getPlanning = () => getJson<PlanningDate[]>("/api/planning");
@@ -215,8 +220,32 @@ export const voteDate = (id: number) =>
 export const removeDate = (id: number) =>
   sendJson<{ ok: boolean }>("DELETE", `/api/planning/dates/${id}`);
 
-export const setupFromDate = (id: number, body: { name: string; venue?: string }) =>
-  postJson<{ id: number }>(`/api/planning/dates/${id}/setup`, body);
+// Toggle a member's attendance for a proposed date by member id. Public — no
+// sign-in required, so anyone can build the roster once the date is agreed.
+export const toggleAttendee = (id: number, userId: string) =>
+  postJson<{ ok: boolean; present: boolean; voteCount: number }>(
+    `/api/planning/dates/${id}/attendees`,
+    { userId: Number(userId) }
+  );
+
+// Lock a proposed date in as the next tournament night. Freezes voting and
+// keeps the agreed players on the planner; no tournament is created yet.
+export const lockPlanningDate = (id: number, body: { name: string; venue?: string; host?: string }) =>
+  postJson<{ id: number; locked: boolean }>(`/api/planning/dates/${id}/setup`, body);
+
+// Start the game for a locked-in date: creates the live tournament with the
+// agreed players and clears the planning date.
+export const startPlanningGame = (id: number) =>
+  postJson<{ id: number }>(`/api/planning/dates/${id}/start`, {});
+
+// Add / remove a member on a locked-in night's roster before it starts.
+export const addPlanningPlayer = (id: number, userId: string) =>
+  postJson<{ ok: boolean }>(`/api/planning/dates/${id}/players`, {
+    userId: Number(userId),
+  });
+
+export const removePlanningPlayer = (id: number, userId: string) =>
+  sendJson<{ ok: boolean }>("DELETE", `/api/planning/dates/${id}/players/${userId}`);
 
 // ----- club statistics -----
 

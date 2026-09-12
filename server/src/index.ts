@@ -228,7 +228,14 @@ function ensureLeaderboardView(): Promise<void> {
             u.name,
             u.nickname,
             u.location,
-            ISNULL(SUM(r.net), 0)                                AS net_pnl,
+            -- Money P&L reflects EVERY game and every bullet a player has fired
+            -- (second games and rebuys included), independent of the trophy-game
+            -- filter used for standings below.
+            ISNULL((
+                SELECT SUM(r2.net)
+                FROM dbo.tournament_results r2
+                WHERE r2.user_id = u.id
+            ), 0)                                               AS net_pnl,
             -- Games played = the trophy games this player has a result in.
             COUNT(r.id)                                          AS games,
             -- Wins come from the recorded winner of each trophy game so the
@@ -397,20 +404,54 @@ async function loadTournaments(): Promise<TournamentDto[]> {
     confirmedByTournament.set(c.tournament_id, list);
   }
 
-  return result.recordset.map((r: any) => ({
-    id: String(r.id),
-    name: r.name,
-    date: new Date(r.played_on).toISOString().slice(0, 10),
-    venue: r.venue,
-    address: r.address ?? "",
-    players: Number(r.players ?? 0),
-    buyIn: Number(r.buy_in ?? 0),
-    prizePool: Number(r.prize_pool ?? 0),
-    status: r.status,
-    winnerId: r.winner_id != null ? String(r.winner_id) : undefined,
-    hostId: r.host_id != null ? String(r.host_id) : undefined,
-    confirmedPlayerIds: confirmedByTournament.get(r.id) ?? [],
-  }));
+  // Recorded buy-in per player, used to derive the live prize pool from the
+  // number of bullets each confirmed player has bought in with.
+  const results = await pool.request().query(`
+    SELECT tournament_id, user_id, buy_in_total
+    FROM dbo.tournament_results
+  `);
+  const buyInByTournament = new Map<number, Map<string, number>>();
+  for (const row of results.recordset as any[]) {
+    const byUser = buyInByTournament.get(row.tournament_id) ?? new Map<string, number>();
+    byUser.set(String(row.user_id), Number(row.buy_in_total) || 0);
+    buyInByTournament.set(row.tournament_id, byUser);
+  }
+
+  return result.recordset.map((r: any) => {
+    const confirmedIds = confirmedByTournament.get(r.id) ?? [];
+    let players = Number(r.players ?? 0);
+    let prizePool = Number(r.prize_pool ?? 0);
+
+    // For a live game the prize pool is derived automatically: every confirmed
+    // player is in for at least one bullet, and each extra bullet they buy adds
+    // another buy-in to the pot.
+    if (r.status === "live" && confirmedIds.length > 0) {
+      const perBullet = Number(r.buy_in) > 0 ? Number(r.buy_in) : 10;
+      const byUser = buyInByTournament.get(r.id);
+      let bullets = 0;
+      for (const uid of confirmedIds) {
+        const total = byUser?.get(uid);
+        bullets += total != null ? Math.max(1, Math.round(total / perBullet)) : 1;
+      }
+      players = confirmedIds.length;
+      prizePool = bullets * perBullet;
+    }
+
+    return {
+      id: String(r.id),
+      name: r.name,
+      date: new Date(r.played_on).toISOString().slice(0, 10),
+      venue: r.venue,
+      address: r.address ?? "",
+      players,
+      buyIn: Number(r.buy_in ?? 0),
+      prizePool,
+      status: r.status,
+      winnerId: r.winner_id != null ? String(r.winner_id) : undefined,
+      hostId: r.host_id != null ? String(r.host_id) : undefined,
+      confirmedPlayerIds: confirmedIds,
+    };
+  });
 }
 
 // ----- routes -----
@@ -747,6 +788,26 @@ app.post("/api/tournaments/:id/confirmations", async (req, res) => {
 // starts live with no winner so the night can run several games back-to-back.
 function stripGameSuffix(name: string): string {
   return name.replace(/\s*[â€”-]\s*Game\s+\d+\s*$/i, "").trim();
+}
+
+// Highest existing "Game N" across all tournament names, + 1. Second games of a
+// night reuse the night's number via the "— Game 2" suffix (see clone), so only
+// whole new nights advance the count.
+async function nextGameNumber(pool: sql.ConnectionPool): Promise<number> {
+  const r = await pool.request().query(`SELECT name FROM dbo.tournaments`);
+  let max = 0;
+  for (const row of r.recordset as { name: string }[]) {
+    const m = /Game\s+(\d+)/i.exec(row.name ?? "");
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  return max + 1;
+}
+
+// Prefix a decided title with its game count, e.g. "September Showdown" ->
+// "Game 43 - September Showdown". Any existing "Game N -" prefix is replaced.
+function withGamePrefix(no: number, title: string): string {
+  const clean = title.replace(/^\s*Game\s+\d+\s*[-\u2014]\s*/i, "").trim();
+  return `Game ${no} - ${clean}`;
 }
 
 app.post("/api/tournaments/:id/clone", async (req, res) => {
@@ -1502,6 +1563,15 @@ function ensurePlanningSchema(): Promise<void> {
           created_at  DATETIME2     NOT NULL DEFAULT SYSUTCDATETIME(),
           CONSTRAINT UQ_planning_dates UNIQUE (proposed_on)
         );
+        -- Columns added when a date is "locked in" (set up as a tournament night).
+        IF COL_LENGTH('dbo.planning_dates', 'locked_at') IS NULL
+          ALTER TABLE dbo.planning_dates ADD locked_at DATETIME2 NULL;
+        IF COL_LENGTH('dbo.planning_dates', 'tournament_name') IS NULL
+          ALTER TABLE dbo.planning_dates ADD tournament_name NVARCHAR(160) NULL;
+        IF COL_LENGTH('dbo.planning_dates', 'tournament_venue') IS NULL
+          ALTER TABLE dbo.planning_dates ADD tournament_venue NVARCHAR(160) NULL;
+        IF COL_LENGTH('dbo.planning_dates', 'tournament_host') IS NULL
+          ALTER TABLE dbo.planning_dates ADD tournament_host NVARCHAR(160) NULL;
         IF OBJECT_ID('dbo.planning_votes', 'U') IS NULL
         CREATE TABLE dbo.planning_votes (
           id          INT IDENTITY(1,1) PRIMARY KEY,
@@ -1512,6 +1582,10 @@ function ensurePlanningSchema(): Promise<void> {
           created_at  DATETIME2     NOT NULL DEFAULT SYSUTCDATETIME(),
           CONSTRAINT UQ_planning_votes UNIQUE (date_id, voter_email)
         );
+        -- user_id lets an organiser add a member to a locked-in night directly,
+        -- even if that member has no sign-in email to match on later.
+        IF COL_LENGTH('dbo.planning_votes', 'user_id') IS NULL
+          ALTER TABLE dbo.planning_votes ADD user_id INT NULL;
       `);
     })().catch((err) => {
       planningReady = null;
@@ -1530,15 +1604,20 @@ app.get("/api/planning", async (req, res) => {
     const myEmail = principal?.email?.toLowerCase() ?? "";
     const pool = await getPool();
     const datesResult = await pool.request().query(`
-      SELECT id, proposed_on, note FROM dbo.planning_dates ORDER BY proposed_on
+      SELECT id, proposed_on, note, locked_at, tournament_name, tournament_venue, tournament_host
+      FROM dbo.planning_dates ORDER BY proposed_on
     `);
     const votesResult = await pool.request().query(`
-      SELECT date_id, voter_email, voter_name FROM dbo.planning_votes
+      SELECT date_id, voter_email, voter_name, user_id FROM dbo.planning_votes
     `);
-    const votesByDate = new Map<number, { email: string; name: string }[]>();
+    const votesByDate = new Map<number, { email: string; name: string; userId?: string }[]>();
     for (const v of votesResult.recordset) {
       const list = votesByDate.get(v.date_id) ?? [];
-      list.push({ email: v.voter_email, name: v.voter_name ?? "" });
+      list.push({
+        email: v.voter_email,
+        name: v.voter_name ?? "",
+        userId: v.user_id != null ? String(v.user_id) : undefined,
+      });
       votesByDate.set(v.date_id, list);
     }
     const out = datesResult.recordset.map((d: any) => {
@@ -1550,6 +1629,10 @@ app.get("/api/planning", async (req, res) => {
         voteCount: voters.length,
         voters,
         votedByMe: !!myEmail && voters.some((v) => v.email.toLowerCase() === myEmail),
+        locked: !!d.locked_at,
+        name: d.tournament_name ?? undefined,
+        venue: d.tournament_venue ?? undefined,
+        host: d.tournament_host ?? undefined,
       };
     });
     res.json(out);
@@ -1558,11 +1641,10 @@ app.get("/api/planning", async (req, res) => {
   }
 });
 
-// Propose a candidate date. Any signed-in member may do this.
+// Propose a candidate date. Public — the club plans over WhatsApp, so anyone
+// can put a date on the calendar without signing in.
 app.post("/api/planning/dates", async (req, res) => {
   if (!requireDb(res)) return;
-  const principal = requireSignedIn(req, res);
-  if (!principal) return;
   try {
     await ensurePlanningSchema();
     const { date, note } = req.body ?? {};
@@ -1607,6 +1689,16 @@ app.post("/api/planning/dates/:id/vote", async (req, res) => {
     }
     const email = principal.email.toLowerCase();
     const pool = await getPool();
+    const lockCheck = await pool
+      .request()
+      .input("DateId", sql.Int, dateId)
+      .query(`SELECT locked_at FROM dbo.planning_dates WHERE id = @DateId`);
+    if (lockCheck.recordset.length === 0) {
+      return res.status(404).json({ error: "Date not found" });
+    }
+    if (lockCheck.recordset[0].locked_at) {
+      return res.status(409).json({ error: "This night is locked in — voting is closed" });
+    }
     const existing = await pool
       .request()
       .input("DateId", sql.Int, dateId)
@@ -1644,9 +1736,89 @@ app.post("/api/planning/dates/:id/vote", async (req, res) => {
   }
 });
 
-// Remove a proposed date (organiser only).
+// Toggle a member's attendance for a proposed date by member id. Public on
+// purpose: the club agrees the date over WhatsApp, then anyone can build the
+// roster by tapping each player's button — no sign-in required.
+app.post("/api/planning/dates/:id/attendees", async (req, res) => {
+  if (!requireDb(res)) return;
+  try {
+    await ensurePlanningSchema();
+    const dateId = Number(req.params.id);
+    const userId = Number(req.body?.userId);
+    if (!Number.isFinite(dateId) || !Number.isFinite(userId)) {
+      return res.status(400).json({ error: "valid date id and userId are required" });
+    }
+    const pool = await getPool();
+    const dateRow = await pool
+      .request()
+      .input("Id", sql.Int, dateId)
+      .query(`SELECT locked_at FROM dbo.planning_dates WHERE id = @Id`);
+    if (dateRow.recordset.length === 0) {
+      return res.status(404).json({ error: "Date not found" });
+    }
+    if (dateRow.recordset[0].locked_at) {
+      return res.status(409).json({ error: "This night is locked in — the roster is closed" });
+    }
+    const userRow = await pool
+      .request()
+      .input("UserId", sql.Int, userId)
+      .query(`SELECT id, name, email FROM dbo.users WHERE id = @UserId`);
+    if (userRow.recordset.length === 0) {
+      return res.status(404).json({ error: "Member not found" });
+    }
+    const u = userRow.recordset[0];
+    // Real email if the member has one; otherwise a stable synthetic key so the
+    // UNIQUE(date_id, voter_email) constraint still holds.
+    const email = (u.email && String(u.email).trim())
+      ? String(u.email).toLowerCase()
+      : `plan-${userId}@hocuspokers.local`;
+    const existing = await pool
+      .request()
+      .input("DateId", sql.Int, dateId)
+      .input("UserId", sql.Int, userId)
+      .input("Email", sql.NVarChar(160), email)
+      .query(`
+        SELECT id FROM dbo.planning_votes
+        WHERE date_id = @DateId AND (user_id = @UserId OR LOWER(voter_email) = @Email)
+      `);
+    let present: boolean;
+    if (existing.recordset.length > 0) {
+      await pool
+        .request()
+        .input("DateId", sql.Int, dateId)
+        .input("UserId", sql.Int, userId)
+        .input("Email", sql.NVarChar(160), email)
+        .query(`
+          DELETE FROM dbo.planning_votes
+          WHERE date_id = @DateId AND (user_id = @UserId OR LOWER(voter_email) = @Email)
+        `);
+      present = false;
+    } else {
+      await pool
+        .request()
+        .input("DateId", sql.Int, dateId)
+        .input("Email", sql.NVarChar(160), email)
+        .input("Name", sql.NVarChar(160), u.name || null)
+        .input("UserId", sql.Int, userId)
+        .query(`
+          INSERT INTO dbo.planning_votes (date_id, voter_email, voter_name, user_id)
+          VALUES (@DateId, @Email, @Name, @UserId)
+        `);
+      present = true;
+    }
+    const count = await pool
+      .request()
+      .input("DateId", sql.Int, dateId)
+      .query(`SELECT COUNT(*) AS n FROM dbo.planning_votes WHERE date_id = @DateId`);
+    res.json({ ok: true, present, voteCount: count.recordset[0].n });
+  } catch (err: any) {
+    serverError(res, "Failed to update attendee", err);
+  }
+});
+
+// Remove a proposed or locked-in date. Public — anyone planning the night can
+// clear a date or cancel a locked-in night (its votes cascade-delete).
 app.delete("/api/planning/dates/:id", async (req, res) => {
-  if (!requireUser(req, res)) return;
   if (!requireDb(res)) return;
   try {
     await ensurePlanningSchema();
@@ -1668,27 +1840,84 @@ app.delete("/api/planning/dates/:id", async (req, res) => {
   }
 });
 
-// Turn a proposed date into a real (upcoming) tournament (organiser only).
-// The voters become the agreed player count.
+// Lock a proposed date in as the next tournament night (organiser only).
+// This does NOT create a tournament yet — it freezes voting and keeps the
+// agreed players visible on the planner until game day, when the organiser
+// hits "Start game" from the Tournaments page.
 app.post("/api/planning/dates/:id/setup", async (req, res) => {
+  if (!requireDb(res)) return;
+  try {
+    await ensurePlanningSchema();
+    const dateId = Number(req.params.id);
+    const { name, venue, host } = req.body ?? {};
+    if (!Number.isFinite(dateId) || !name) {
+      return res.status(400).json({ error: "valid date id and name are required" });
+    }
+    const pool = await getPool();
+    const updated = await pool
+      .request()
+      .input("Id", sql.Int, dateId)
+      .input("Name", sql.NVarChar(160), name)
+      .input("Venue", sql.NVarChar(160), venue || "The Card Room, Ealing")
+      .input("Host", sql.NVarChar(160), host || null)
+      .query(`
+        UPDATE dbo.planning_dates
+        SET locked_at = SYSUTCDATETIME(),
+            tournament_name = @Name,
+            tournament_venue = @Venue,
+            tournament_host = @Host
+        OUTPUT INSERTED.id
+        WHERE id = @Id
+      `);
+    if (updated.recordset.length === 0) {
+      return res.status(404).json({ error: "Date not found" });
+    }
+    // Locking in a night settles the plan, so clear away the other proposed
+    // alternatives (their votes cascade-delete). Any already-locked night is
+    // left untouched.
+    await pool
+      .request()
+      .input("Id", sql.Int, dateId)
+      .query(`
+        DELETE FROM dbo.planning_dates
+        WHERE id <> @Id AND locked_at IS NULL
+      `);
+    res.json({ id: dateId, locked: true });
+  } catch (err: any) {
+    serverError(res, "Failed to lock in the date", err);
+  }
+});
+
+// Start the game for a locked-in date (organiser only). Creates the tournament
+// as "live" with the agreed voters as its confirmed players, then clears the
+// planning date now that the night is under way.
+app.post("/api/planning/dates/:id/start", async (req, res) => {
   if (!requireUser(req, res)) return;
   if (!requireDb(res)) return;
   try {
     await ensurePlanningSchema();
     const dateId = Number(req.params.id);
-    const { name, venue } = req.body ?? {};
-    if (!Number.isFinite(dateId) || !name) {
-      return res.status(400).json({ error: "valid date id and name are required" });
+    if (!Number.isFinite(dateId)) {
+      return res.status(400).json({ error: "valid date id is required" });
     }
     const pool = await getPool();
     const dateRow = await pool
       .request()
       .input("Id", sql.Int, dateId)
-      .query(`SELECT proposed_on FROM dbo.planning_dates WHERE id = @Id`);
+      .query(`
+        SELECT proposed_on, locked_at, tournament_name, tournament_venue
+        FROM dbo.planning_dates WHERE id = @Id
+      `);
     if (dateRow.recordset.length === 0) {
       return res.status(404).json({ error: "Date not found" });
     }
-    const playedOn = new Date(dateRow.recordset[0].proposed_on).toISOString().slice(0, 10);
+    const row = dateRow.recordset[0];
+    if (!row.locked_at) {
+      return res.status(409).json({ error: "This date isn't locked in yet" });
+    }
+    const playedOn = new Date(row.proposed_on).toISOString().slice(0, 10);
+    const name = withGamePrefix(await nextGameNumber(pool), row.tournament_name || "Poker Night");
+    const venue = row.tournament_venue || "The Card Room, Ealing";
     const votes = await pool
       .request()
       .input("DateId", sql.Int, dateId)
@@ -1699,41 +1928,135 @@ app.post("/api/planning/dates/:id/setup", async (req, res) => {
       .request()
       .input("Name", sql.NVarChar(160), name)
       .input("PlayedOn", sql.Date, playedOn)
-      .input("Venue", sql.NVarChar(160), venue || "The Card Room, Ealing")
+      .input("Venue", sql.NVarChar(160), venue)
       .input("Players", sql.Int, players)
       .query(`
         INSERT INTO dbo.tournaments (name, played_on, venue, players, buy_in, prize_pool, status)
         OUTPUT INSERTED.id
-        VALUES (@Name, @PlayedOn, @Venue, @Players, 0, 0, 'upcoming')
+        VALUES (@Name, @PlayedOn, @Venue, @Players, 0, 0, 'live')
       `);
 
     const tournamentId = created.recordset[0].id;
 
-    // Auto-confirm every member who voted on this date.
-    // Votes store voter_email; match to dbo.users.email to get user_id.
+    // Auto-confirm every member who's on the locked-in roster. Voters are
+    // matched to dbo.users by email; players added by the organiser carry an
+    // explicit user_id, so COALESCE picks whichever is available.
     await pool
       .request()
       .input("TournamentId", sql.Int, tournamentId)
       .input("DateId", sql.Int, dateId)
       .query(`
         INSERT INTO dbo.tournament_confirmations (tournament_id, user_id)
-        SELECT @TournamentId, u.id
+        SELECT DISTINCT @TournamentId, COALESCE(v.user_id, u.id)
         FROM dbo.planning_votes v
-        JOIN dbo.users u ON LOWER(u.email) = LOWER(v.voter_email)
+        LEFT JOIN dbo.users u ON LOWER(u.email) = LOWER(v.voter_email)
         WHERE v.date_id = @DateId
+          AND COALESCE(v.user_id, u.id) IS NOT NULL
           AND NOT EXISTS (
             SELECT 1 FROM dbo.tournament_confirmations c
-            WHERE c.tournament_id = @TournamentId AND c.user_id = u.id
+            WHERE c.tournament_id = @TournamentId
+              AND c.user_id = COALESCE(v.user_id, u.id)
           )
       `);
 
-    // Clear the proposed date now it's locked in.
+    // The night is under way — clear the planning date.
     await pool.request().input("Id", sql.Int, dateId)
       .query(`DELETE FROM dbo.planning_dates WHERE id = @Id`);
 
     res.status(201).json({ id: tournamentId });
   } catch (err: any) {
-    serverError(res, "Failed to set up tournament", err);
+    serverError(res, "Failed to start the game", err);
+  }
+});
+
+// Add a member to a locked-in night's roster (organiser only). Stored as a
+// planning vote carrying the member's user_id so they get confirmed on start.
+app.post("/api/planning/dates/:id/players", async (req, res) => {
+  if (!requireUser(req, res)) return;
+  if (!requireDb(res)) return;
+  try {
+    await ensurePlanningSchema();
+    const dateId = Number(req.params.id);
+    const userId = Number(req.body?.userId);
+    if (!Number.isFinite(dateId) || !Number.isFinite(userId)) {
+      return res.status(400).json({ error: "valid date id and userId are required" });
+    }
+    const pool = await getPool();
+    const dateRow = await pool
+      .request()
+      .input("Id", sql.Int, dateId)
+      .query(`SELECT locked_at FROM dbo.planning_dates WHERE id = @Id`);
+    if (dateRow.recordset.length === 0) {
+      return res.status(404).json({ error: "Date not found" });
+    }
+    if (!dateRow.recordset[0].locked_at) {
+      return res.status(409).json({ error: "This night isn't locked in yet" });
+    }
+    const userRow = await pool
+      .request()
+      .input("UserId", sql.Int, userId)
+      .query(`SELECT id, name, email FROM dbo.users WHERE id = @UserId`);
+    if (userRow.recordset.length === 0) {
+      return res.status(404).json({ error: "Member not found" });
+    }
+    const u = userRow.recordset[0];
+    // Real email if the member has one; otherwise a stable synthetic key so the
+    // UNIQUE(date_id, voter_email) constraint still holds.
+    const email = (u.email && String(u.email).trim())
+      ? String(u.email).toLowerCase()
+      : `plan-${userId}@hocuspokers.local`;
+    await pool
+      .request()
+      .input("DateId", sql.Int, dateId)
+      .input("Email", sql.NVarChar(160), email)
+      .input("Name", sql.NVarChar(160), u.name || null)
+      .input("UserId", sql.Int, userId)
+      .query(`
+        IF NOT EXISTS (
+          SELECT 1 FROM dbo.planning_votes
+          WHERE date_id = @DateId AND (user_id = @UserId OR LOWER(voter_email) = @Email)
+        )
+        INSERT INTO dbo.planning_votes (date_id, voter_email, voter_name, user_id)
+        VALUES (@DateId, @Email, @Name, @UserId)
+      `);
+    res.status(201).json({ ok: true });
+  } catch (err: any) {
+    serverError(res, "Failed to add player", err);
+  }
+});
+
+// Remove a member from a locked-in night's roster (organiser only). Matches by
+// user_id or by the member's email so both added players and voters can go.
+app.delete("/api/planning/dates/:id/players/:userId", async (req, res) => {
+  if (!requireUser(req, res)) return;
+  if (!requireDb(res)) return;
+  try {
+    await ensurePlanningSchema();
+    const dateId = Number(req.params.id);
+    const userId = Number(req.params.userId);
+    if (!Number.isFinite(dateId) || !Number.isFinite(userId)) {
+      return res.status(400).json({ error: "valid date id and userId are required" });
+    }
+    const pool = await getPool();
+    const userRow = await pool
+      .request()
+      .input("UserId", sql.Int, userId)
+      .query(`SELECT email FROM dbo.users WHERE id = @UserId`);
+    const email = userRow.recordset[0]?.email
+      ? String(userRow.recordset[0].email).toLowerCase()
+      : `plan-${userId}@hocuspokers.local`;
+    await pool
+      .request()
+      .input("DateId", sql.Int, dateId)
+      .input("UserId", sql.Int, userId)
+      .input("Email", sql.NVarChar(160), email)
+      .query(`
+        DELETE FROM dbo.planning_votes
+        WHERE date_id = @DateId AND (user_id = @UserId OR LOWER(voter_email) = @Email)
+      `);
+    res.json({ ok: true });
+  } catch (err: any) {
+    serverError(res, "Failed to remove player", err);
   }
 });
 

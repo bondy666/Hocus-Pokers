@@ -11,8 +11,13 @@ import {
   recordResult,
   updateResult,
   getResults,
+  getPlanning,
+  startPlanningGame,
+  addPlanningPlayer,
+  removePlanningPlayer,
   type NewTournament,
   type ResultRow,
+  type PlanningDate,
 } from "../api.ts";
 import TournamentPhotos from "../components/TournamentPhotos.tsx";
 
@@ -373,7 +378,7 @@ function GameRoster({
           {confirmed.map((m) => {
             const card = cardFor(`${tournament.id}:${m.id}`);
             const r = resultFor(m.id);
-            const bullets = r ? Math.max(1, Math.round(r.buy_in_total / bulletCost(tournament))) : 0;
+            const bullets = r ? Math.max(1, Math.round(r.buy_in_total / bulletCost(tournament))) : 1;
             return (
               <li
                 key={m.id}
@@ -392,11 +397,11 @@ function GameRoster({
                   {r && placeMedal(r.finish_place) && (
                     <span className="badge-medal">{placeMedal(r.finish_place)}</span>
                   )}
-                  {bullets > 1 && (
+                  {bullets >= 1 && (
                     <span
                       className="badge-bullets"
-                      title={`${bullets} bullets`}
-                      aria-label={`${bullets} bullets`}
+                      title={`${bullets} bullet${bullets === 1 ? "" : "s"}`}
+                      aria-label={`${bullets} bullet${bullets === 1 ? "" : "s"}`}
                     >
                       {"\uD83C\uDFAF".repeat(bullets)}
                     </span>
@@ -485,13 +490,20 @@ function GameRoster({
   );
 }
 
-// Button that clones a tournament into a fresh game on the same night.
+// Button that clones a tournament into a fresh game on the same night. Lights
+// up (enabled) only on the day of the night, once the previous game finished.
 function NewGameButton({
   id,
   refresh,
+  label = "Start game",
+  disabled = false,
+  title,
 }: {
   id: string;
   refresh: () => Promise<void>;
+  label?: string;
+  disabled?: boolean;
+  title?: string;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -510,11 +522,177 @@ function NewGameButton({
 
   return (
     <>
-      <button type="button" className="btn-ghost" onClick={onClick} disabled={busy}>
-        {busy ? "Adding…" : "+ New game"}
+      <button
+        type="button"
+        className="btn-save start-game"
+        onClick={onClick}
+        disabled={busy || disabled}
+        title={title}
+      >
+        {busy ? "Starting…" : label}
       </button>
       {error && <span className="chip-err">{error}</span>}
     </>
+  );
+}
+
+// A locked-in planning night that hasn't started yet. Shows the agreed players
+// (editable before the night) and a "Start game" button that lights up on the
+// day of the tournament.
+function PendingNight({
+  night,
+  members,
+  isToday,
+  canWrite,
+  onStart,
+  onRosterChange,
+}: {
+  night: PlanningDate;
+  members: Member[];
+  isToday: boolean;
+  canWrite: boolean;
+  onStart: () => Promise<void>;
+  onRosterChange: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [rosterBusy, setRosterBusy] = useState<string | null>(null);
+  const [addId, setAddId] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  // Resolve each agreed voter to a member id (added players carry userId; older
+  // votes are matched back to a member by email) for display and removal.
+  const memberIdForVoter = (v: PlanningDate["voters"][number]): string | undefined =>
+    v.userId ??
+    (v.email
+      ? members.find(
+          (m) => m.email && m.email.toLowerCase() === v.email.toLowerCase()
+        )?.id
+      : undefined);
+
+  const agreedIds = new Set(
+    night.voters.map(memberIdForVoter).filter((id): id is string => Boolean(id))
+  );
+  const available = members.filter((m) => !agreedIds.has(m.id));
+
+  const start = async () => {
+    try {
+      setBusy(true);
+      setError(null);
+      await startPlanningGame(night.id);
+      await onStart();
+    } catch (e: any) {
+      setError(e.message || "Failed to start the game");
+      setBusy(false);
+    }
+  };
+
+  const addPlayer = async (memberId: string) => {
+    if (!memberId) return;
+    try {
+      setRosterBusy(memberId);
+      setError(null);
+      await addPlanningPlayer(night.id, memberId);
+      setAddId("");
+      await onRosterChange();
+    } catch (e: any) {
+      setError(e.message || "Failed to add player");
+    } finally {
+      setRosterBusy(null);
+    }
+  };
+
+  const removePlayer = async (memberId: string) => {
+    try {
+      setRosterBusy(memberId);
+      setError(null);
+      await removePlanningPlayer(night.id, memberId);
+      await onRosterChange();
+    } catch (e: any) {
+      setError(e.message || "Failed to remove player");
+    } finally {
+      setRosterBusy(null);
+    }
+  };
+
+  return (
+    <li className="tournament pending">
+      <div className="tournament-main">
+        <div className="tournament-top">
+          <span className="status status-upcoming" style={{ whiteSpace: "nowrap" }}>
+            🔒 Locked in
+          </span>
+          <span className="tournament-date">{formatDate(night.date)}</span>
+        </div>
+        <h3 className="tournament-name">{night.name || "Poker Night"}</h3>
+        <p className="tournament-venue">{night.venue || "The Card Room, Ealing"}</p>
+        <div className="confirmed-players">
+          <span className="confirmed-label">
+            Agreed players ({night.voters.length})
+          </span>
+          {night.voters.length > 0 && (
+            <ul className="player-badges">
+              {night.voters.map((v) => {
+                const mid = memberIdForVoter(v);
+                return (
+                  <li key={v.email} className="player-badge">
+                    {v.name || v.email.split("@")[0]}
+                    {canWrite && mid && (
+                      <button
+                        type="button"
+                        className="badge-remove"
+                        onClick={() => removePlayer(mid)}
+                        disabled={rosterBusy === mid}
+                        aria-label={`Remove ${v.name || v.email}`}
+                        title="Remove player"
+                      >
+                        ×
+                      </button>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          {canWrite && available.length > 0 && (
+            <div className="roster-add">
+              <select
+                value={addId}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  setAddId(id);
+                  if (id) void addPlayer(id);
+                }}
+                disabled={rosterBusy !== null}
+              >
+                <option value="">+ Add player…</option>
+                {available.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+        {canWrite && (
+          <div className="tournament-admin">
+            <button
+              type="button"
+              className="btn-save start-game"
+              onClick={start}
+              disabled={busy || !isToday}
+              title={isToday ? "Start the first game" : "Lights up on game day"}
+            >
+              {busy ? "Starting…" : "Start game"}
+            </button>
+            {!isToday && (
+              <span className="start-hint">Starts on {formatDate(night.date)}</span>
+            )}
+          </div>
+        )}
+      </div>
+      {error && <p className="admin-note err">{error}</p>}
+    </li>
   );
 }
 
@@ -523,16 +701,36 @@ export default function Tournaments() {
   const canWrite = !!user && user.canWrite !== false;
   const [editingId, setEditingId] = useState<string | null>(null);
 
+  // Locked-in nights that haven't been started yet (fetched from the planner).
+  const [pending, setPending] = useState<PlanningDate[]>([]);
+  const loadPending = useCallback(async () => {
+    try {
+      const dates = await getPlanning();
+      setPending(dates.filter((d) => d.locked));
+    } catch {
+      /* planner is best-effort here; ignore load failures */
+    }
+  }, []);
+  useEffect(() => {
+    void loadPending();
+  }, [loadPending]);
+
+  const todayIso = useMemo(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }, []);
+
   // Book of previously-used venues and the address last associated with each,
   // used to autocomplete the venue name and auto-fill its address when editing.
   const venueBook = useMemo(() => buildVenueBook(tournaments), [tournaments]);
 
+  const idNum = (id: string) => {
+    const m = id.match(/\d+/g);
+    return m ? Number(m.join("")) : 0;
+  };
+
   // The first game of each night (lowest id on that date) is the trophy game.
   const firstGameIds = useMemo(() => {
-    const idNum = (id: string) => {
-      const m = id.match(/\d+/g);
-      return m ? Number(m.join("")) : 0;
-    };
     const firstByDate = new Map<string, { id: string; n: number }>();
     for (const t of tournaments) {
       const n = idNum(t.id);
@@ -540,6 +738,18 @@ export default function Tournaments() {
       if (!cur || n < cur.n) firstByDate.set(t.date, { id: t.id, n });
     }
     return new Set([...firstByDate.values()].map((v) => v.id));
+  }, [tournaments]);
+
+  // The latest game of each night (highest id on that date) — the only one that
+  // offers a "Start game" button to kick off the next game once it's finished.
+  const latestGameIds = useMemo(() => {
+    const latestByDate = new Map<string, { id: string; n: number }>();
+    for (const t of tournaments) {
+      const n = idNum(t.id);
+      const cur = latestByDate.get(t.date);
+      if (!cur || n > cur.n) latestByDate.set(t.date, { id: t.id, n });
+    }
+    return new Set([...latestByDate.values()].map((v) => v.id));
   }, [tournaments]);
 
   // A night is "over" from 5am the morning after the game date.
@@ -561,6 +771,20 @@ export default function Tournaments() {
         <p className="section-sub">Live, upcoming and settled — the full felt calendar.</p>
 
         <ul className="tournament-list">
+          {pending.map((night) => (
+            <PendingNight
+              key={`plan-${night.id}`}
+              night={night}
+              members={members}
+              isToday={night.date === todayIso}
+              canWrite={canWrite}
+              onStart={async () => {
+                await refresh();
+                await loadPending();
+              }}
+              onRosterChange={loadPending}
+            />
+          ))}
           {sorted.map((t) =>
             editingId === t.id ? (
               <li className="tournament editing" key={t.id}>
@@ -606,9 +830,19 @@ export default function Tournaments() {
                       >
                         Edit
                       </button>
-                      {!nightIsOver(t.date) && (
-                        <NewGameButton id={t.id} refresh={refresh} />
-                      )}
+                      {t.date === todayIso &&
+                        t.status === "complete" &&
+                        latestGameIds.has(t.id) && (
+                          <NewGameButton
+                            id={t.id}
+                            refresh={async () => {
+                              await refresh();
+                              await loadPending();
+                            }}
+                            label="Start game"
+                            title="Start the next game of the night"
+                          />
+                        )}
                       {!nightIsOver(t.date) && t.status !== "complete" && (
                         <DeleteButton id={t.id} name={t.name} refresh={refresh} />
                       )}

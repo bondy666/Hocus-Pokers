@@ -243,7 +243,7 @@ export default function Statistics() {
                         <td className={`num ${pnlClass(p.net)}`}>{gbp(p.net)}</td>
                         <td className="num">{gbp(p.totalBuyIn)}</td>
                         <td className="num">{gbp(p.totalCashOut)}</td>
-                        <td className="num">0</td>
+                        <td className="num">{p.games}</td>
                         <td className="num">{p.firsts}</td>
                         <td className="num">{p.seconds}</td>
                         <td className="num">{p.thirds}</td>

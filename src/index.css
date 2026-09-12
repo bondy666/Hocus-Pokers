@@ -1278,6 +1278,30 @@ a {
   align-items: center;
 }
 
+/* Locked-in night waiting to be started, and its "Start game" button. */
+.tournament.pending {
+  border-left: 4px solid var(--gold-500);
+}
+
+.start-game {
+  box-shadow: 0 0 0 1px var(--gold-400);
+}
+
+.start-game:not(:disabled) {
+  animation: start-glow 1.6s ease-in-out infinite;
+}
+
+@keyframes start-glow {
+  0%, 100% { box-shadow: 0 0 0 1px var(--gold-400); }
+  50% { box-shadow: 0 0 12px 2px var(--gold-500); }
+}
+
+.start-hint {
+  font-size: 0.72rem;
+  color: var(--ink-700);
+  font-style: italic;
+}
+
 .tournament.editing {
   display: block;
   background: linear-gradient(180deg, var(--cream-100), var(--cream-200));
@@ -1480,6 +1504,22 @@ a {
   color: var(--ink-900);
 }
 
+.cal-cell.locked {
+  background: var(--felt-800);
+  color: var(--cream-100);
+  border-color: var(--gold-500);
+  opacity: 1;
+  cursor: default;
+}
+
+.cal-lock {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  font-size: 0.6rem;
+  line-height: 1;
+}
+
 .cal-num {
   line-height: 1;
 }
@@ -1528,6 +1568,56 @@ a {
 .plan-card.leader {
   border-left-color: var(--red-card);
   box-shadow: 0 0 0 1px var(--gold-400), var(--shadow);
+}
+
+.plan-card.locked {
+  border-left-color: var(--felt-700);
+  background: linear-gradient(180deg, var(--cream-200), var(--cream-300));
+}
+
+.plan-badge.locked {
+  color: var(--felt-700);
+}
+
+.plan-locked-note {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--ink-700);
+}
+
+.plan-locked-host {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--felt-800);
+}
+
+.plan-setup-host {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--felt-800);
+}
+
+.plan-estimate {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px dashed var(--gold-400);
+  border-radius: 0.6rem;
+  background: rgba(11, 93, 59, 0.05);
+}
+
+.plan-estimate-val {
+  font-family: "Cinzel", serif;
+  font-weight: 700;
+  font-size: 1.2rem;
+  color: var(--felt-800);
+  line-height: 1.1;
+}
+
+.plan-estimate-lbl {
+  font-size: 0.72rem;
+  color: var(--ink-700);
 }
 
 .plan-card-head {
@@ -1613,10 +1703,104 @@ a {
   color: var(--ink-900);
 }
 
+.plan-attendees {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.plan-attendees-hint {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--felt-800);
+  opacity: 0.85;
+}
+
+.plan-attendee-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr));
+  gap: 0.4rem;
+}
+
+.attendee-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-family: "Cinzel", serif;
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-align: left;
+  border-radius: 999px;
+  padding: 0.35rem 0.7rem;
+  cursor: pointer;
+  border: 1px solid var(--gold-400);
+  background: #fff;
+  color: var(--felt-800);
+  transition: background 0.15s, color 0.15s, transform 0.05s;
+}
+
+.attendee-btn:hover {
+  background: rgba(11, 93, 59, 0.08);
+}
+
+.attendee-btn:active {
+  transform: scale(0.97);
+}
+
+.attendee-btn.in {
+  background: var(--felt-700);
+  color: var(--cream-100);
+  border-color: var(--felt-700);
+}
+
+.attendee-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.attendee-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.2rem;
+  height: 1.2rem;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.1);
+  font-size: 0.72rem;
+}
+
+.attendee-btn.in .attendee-check {
+  background: rgba(255, 255, 255, 0.22);
+}
+
 .plan-card-actions {
   display: flex;
   gap: 0.4rem;
   flex-wrap: wrap;
+}
+
+.btn-whatsapp {
+  font-family: "Cinzel", serif;
+  font-weight: 600;
+  font-size: 0.82rem;
+  border-radius: 999px;
+  padding: 0.4rem 0.85rem;
+  cursor: pointer;
+  border: 1px solid #1da851;
+  background: #25d366;
+  color: #05331b;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  transition: background 0.15s, transform 0.05s;
+}
+
+.btn-whatsapp:hover {
+  background: #1ebe5a;
+}
+
+.btn-whatsapp:active {
+  transform: translateY(1px);
 }
 
 .plan-setup {

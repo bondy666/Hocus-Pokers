@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { useClub } from "../ClubContext.ts";
 import type { Member } from "../data.ts";
+import { gbp } from "../data.ts";
 import {
   getPlanning,
   proposeDate,
   voteDate,
   removeDate,
-  setupFromDate,
+  lockPlanningDate,
+  toggleAttendee,
   loginUrl,
   type PlanningDate,
 } from "../api.ts";
@@ -23,7 +24,32 @@ const prettyDate = (s: string) =>
     year: "numeric",
   });
 
+function buildWhatsAppText(d: PlanningDate): string {
+  const players = d.voters.map((v) => v.name || v.email.split("@")[0]);
+  const lines = [
+    "♠️ Poker Night Locked In! ♠️",
+    "",
+    d.name ? `🃏 ${d.name}` : "🃏 Tournament night",
+    `📅 ${prettyDate(d.date)}`,
+  ];
+  if (d.venue) lines.push(`📍 ${d.venue}`);
+  lines.push("", `👥 Players (${players.length}):`);
+  players.forEach((p) => lines.push(`• ${p}`));
+  lines.push("", "Bring Cash. ♠️♥️♣️♦️");
+  return lines.join("\n");
+}
+
+function shareOnWhatsApp(d: PlanningDate) {
+  const text = encodeURIComponent(buildWhatsAppText(d));
+  window.open(`https://wa.me/?text=${text}`, "_blank", "noopener,noreferrer");
+}
+
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+// Club standard buy-in per bullet and the typical number of games in a night,
+// used to estimate the minimum prize pool once a night is locked in.
+const STANDARD_BUY_IN = 10;
+const GAMES_PER_NIGHT = 2;
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
@@ -56,8 +82,6 @@ function randomTournamentName(dateStr: string): string {
 
 export default function PlanNight() {
   const { user, authChecked, refresh, source, members } = useClub();
-  const navigate = useNavigate();
-  const canWrite = user?.canWrite !== false && !!user;
 
   const [dates, setDates] = useState<PlanningDate[]>([]);
   const [loading, setLoading] = useState(true);
@@ -95,7 +119,7 @@ export default function PlanNight() {
   );
 
   const leader = useMemo(() => {
-    const withVotes = dates.filter((d) => d.voteCount > 0);
+    const withVotes = dates.filter((d) => !d.locked && d.voteCount > 0);
     if (withVotes.length === 0) return null;
     return withVotes.sort((a, b) => b.voteCount - a.voteCount || (a.date < b.date ? -1 : 1))[0];
   }, [dates]);
@@ -140,10 +164,12 @@ export default function PlanNight() {
     if (key < todayIso) return; // no past dates
     const existing = byIso.get(key);
     if (existing) {
-      await handleVote(existing.id);
+      if (existing.locked) return; // locked-in nights don't accept votes
+      // Signed-in members get a one-tap vote; everyone else adds themselves via
+      // the per-member buttons on the date card below (no login needed).
+      if (user) await handleVote(existing.id);
       return;
     }
-    if (!canWrite) return;
     try {
       setBusy("new");
       await proposeDate({ date: key });
@@ -172,7 +198,11 @@ export default function PlanNight() {
   };
 
   const handleRemove = async (id: number) => {
-    if (!confirm("Remove this proposed date?")) return;
+    const target = dates.find((x) => x.id === id);
+    const msg = target?.locked
+      ? "Cancel this locked-in night? Planning reopens for a new date."
+      : "Cancel this proposed date? It will be removed for everyone.";
+    if (!confirm(msg)) return;
     try {
       setBusy(id);
       await removeDate(id);
@@ -192,17 +222,6 @@ export default function PlanNight() {
           Propose dates, vote for the ones you can make, then lock in the tournament.
         </p>
 
-        <div className="plan-share">
-          <a
-            className="btn-whatsapp"
-            href={whatsappShareUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <span aria-hidden="true">💬</span> Share on WhatsApp
-          </a>
-        </div>
-
         {source === "seed" && (
           <p className="admin-banner">
             ⚠️ The planner needs the live database. Voting is disabled in seed mode.
@@ -211,7 +230,7 @@ export default function PlanNight() {
 
         {authChecked && !user && (
           <p className="admin-banner">
-            🔑 <a className="inline-link" href={loginUrl("aad", "/plan")}>Sign in</a> to propose dates and vote.
+            🃏 No sign-in needed — propose a date, then tap each player who's in.
           </p>
         )}
 
@@ -254,6 +273,7 @@ export default function PlanNight() {
                   past ? "past" : "",
                   cand ? "candidate" : "",
                   cand?.votedByMe ? "voted" : "",
+                  cand?.locked ? "locked" : "",
                   key === todayIso ? "today" : "",
                 ]
                   .filter(Boolean)
@@ -263,20 +283,28 @@ export default function PlanNight() {
                     key={i}
                     type="button"
                     className={cls}
-                    disabled={past || (!cand && !canWrite)}
+                    disabled={past || (cand?.locked ?? false)}
                     onClick={() => handleDayClick(d)}
-                    title={cand ? `${cand.voteCount} vote(s)` : canWrite ? "Propose this date" : ""}
+                    title={
+                      cand?.locked
+                        ? "Locked in — voting closed"
+                        : cand
+                          ? `${cand.voteCount} vote(s)`
+                          : "Propose this date"
+                    }
                   >
                     <span className="cal-num">{d.getDate()}</span>
-                    {cand && <span className="cal-votes">{cand.voteCount}</span>}
+                    {cand?.locked ? (
+                      <span className="cal-lock" aria-hidden="true">🔒</span>
+                    ) : (
+                      cand && <span className="cal-votes">{cand.voteCount}</span>
+                    )}
                   </button>
                 );
               })}
             </div>
             <p className="cal-hint">
-              {canWrite
-                ? "Click a free day to propose it. Click a highlighted day to vote."
-                : "Highlighted days are proposed. Sign in to vote."}
+              Tap a free day to propose it, then add players on the date card below — no sign-in needed.
             </p>
           </div>
 
@@ -292,20 +320,28 @@ export default function PlanNight() {
                   d={d}
                   members={members}
                   isLeader={leader?.id === d.id}
-                  canWrite={canWrite}
                   busy={busy === d.id}
                   onVote={() => handleVote(d.id)}
                   onRemove={() => handleRemove(d.id)}
-                  onSetup={async (name, venue) => {
+                  onToggleMember={async (memberId) => {
                     try {
                       setBusy(d.id);
-                      await setupFromDate(d.id, { name, venue });
+                      await toggleAttendee(d.id, memberId);
+                      await load();
+                    } catch (e: any) {
+                      setErr(e.message || "Couldn't update the roster.");
+                    } finally {
+                      setBusy(null);
+                    }
+                  }}
+                  onSetup={async (name, venue, host) => {
+                    try {
+                      setBusy(d.id);
+                      await lockPlanningDate(d.id, { name, venue, host });
                       await load();
                       await refresh();
-                      // Tournament created — jump to Tournaments to fill in details.
-                      navigate("/tournaments");
                     } catch (e: any) {
-                      setErr(e.message || "Couldn't set up the tournament.");
+                      setErr(e.message || "Couldn't lock in the tournament.");
                     } finally {
                       setBusy(null);
                     }
@@ -314,6 +350,17 @@ export default function PlanNight() {
               ))
             )}
           </div>
+        </div>
+
+        <div className="plan-share">
+          <a
+            className="btn-whatsapp"
+            href={whatsappShareUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <span aria-hidden="true">💬</span> Share on WhatsApp
+          </a>
         </div>
       </div>
     </section>
@@ -324,41 +371,127 @@ interface CardProps {
   d: PlanningDate;
   members: Member[];
   isLeader: boolean;
-  canWrite: boolean;
   busy: boolean;
   onVote: () => void;
   onRemove: () => void;
-  onSetup: (name: string, venue: string) => void;
+  onToggleMember: (memberId: string) => void;
+  onSetup: (name: string, venue: string, host: string) => void;
 }
 
-function PlanDateCard({ d, members, isLeader, canWrite, busy, onVote, onRemove, onSetup }: CardProps) {
+function PlanDateCard({ d, members, isLeader, busy, onVote, onRemove, onToggleMember, onSetup }: CardProps) {
   const [setup, setSetup] = useState(false);
   const [name, setName] = useState(() => randomTournamentName(d.date));
   const [venue, setVenue] = useState("The Card Room, Ealing");
+  const [hostId, setHostId] = useState("");
+  const hostName = hostId ? (members.find((m) => m.id === hostId)?.name ?? "") : "";
+
+  // A member is "in" if they've been added to this date's roster, matched by
+  // their user id or (as a fallback) their email.
+  const presentIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const v of d.voters) {
+      if (v.userId) ids.add(v.userId);
+    }
+    for (const m of members) {
+      if (m.email && d.voters.some((v) => v.email.toLowerCase() === m.email!.toLowerCase())) {
+        ids.add(m.id);
+      }
+    }
+    return ids;
+  }, [d.voters, members]);
 
   const handleMemberSelect = (memberId: string) => {
+    setHostId(memberId);
     if (!memberId) return;
     const member = members.find((m) => m.id === memberId);
     if (member) setVenue(member.location || member.name);
   };
 
   return (
-    <div className={`plan-card ${isLeader ? "leader" : ""}`}>
+    <div className={`plan-card ${d.locked ? "locked" : isLeader ? "leader" : ""}`}>
       <div className="plan-card-head">
         <div>
           <div className="plan-card-date">{prettyDate(d.date)}</div>
-          {isLeader && <span className="plan-badge">Most popular</span>}
+          {d.locked ? (
+            <span className="plan-badge locked">🔒 Locked in</span>
+          ) : (
+            isLeader && <span className="plan-badge">Most popular</span>
+          )}
         </div>
-        <button
-          type="button"
-          className={`vote-btn ${d.votedByMe ? "on" : ""}`}
-          onClick={onVote}
-          disabled={busy}
-        >
-          {d.votedByMe ? "✓ Available" : "Vote"}
-          <span className="vote-count">{d.voteCount}</span>
-        </button>
+        {!d.locked && (
+          <button
+            type="button"
+            className={`vote-btn ${d.votedByMe ? "on" : ""}`}
+            onClick={onVote}
+            disabled={busy}
+          >
+            {d.votedByMe ? "✓ Available" : "Vote"}
+            <span className="vote-count">{d.voteCount}</span>
+          </button>
+        )}
       </div>
+
+      {d.locked && (
+        <p className="plan-locked-note">
+          {d.name ? <strong>{d.name}</strong> : "Tournament night"} is locked in.
+          {" "}These players are set until game day — head to Tournaments to start the game.
+        </p>
+      )}
+
+      {d.locked && (d.host || d.venue) && (
+        <p className="plan-locked-host">
+          {d.host ? (
+            <>
+              <span aria-hidden>🏠</span> Hosted by <strong>{d.host}</strong>
+              {d.venue ? ` — ${d.venue}` : ""}
+            </>
+          ) : (
+            <>
+              <span aria-hidden>📍</span> {d.venue}
+            </>
+          )}
+        </p>
+      )}
+
+      {d.locked && d.voters.length > 0 && (
+        <div className="plan-estimate">
+          <span className="plan-estimate-val">
+            {gbp(d.voters.length * STANDARD_BUY_IN * GAMES_PER_NIGHT)}
+          </span>
+          <span className="plan-estimate-lbl">
+            Est. min prize pool · {d.voters.length} player{d.voters.length === 1 ? "" : "s"} over {GAMES_PER_NIGHT} games
+          </span>
+        </div>
+      )}
+
+      {!d.locked && members.length > 0 && (
+        <div className="plan-attendees">
+          <p className="plan-attendees-hint">
+            Date agreed on WhatsApp? Tap anyone who's in — no sign-in needed.
+          </p>
+          <div className="plan-attendee-grid">
+            {members.map((m) => {
+              const inGame = presentIds.has(m.id);
+              return (
+                <button
+                  type="button"
+                  key={m.id}
+                  className={`attendee-btn ${inGame ? "in" : ""}`}
+                  onClick={() => onToggleMember(m.id)}
+                  disabled={busy}
+                  aria-pressed={inGame}
+                  title={inGame ? `Remove ${m.name}` : `Add ${m.name}`}
+                >
+                  <span className="attendee-check" aria-hidden="true">
+                    {inGame ? "✓" : "+"}
+                  </span>
+                  {m.name}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {d.voters.length > 0 && (
         <div className="plan-voters">
@@ -370,7 +503,18 @@ function PlanDateCard({ d, members, isLeader, canWrite, busy, onVote, onRemove, 
         </div>
       )}
 
-      {canWrite && (
+      {d.locked && (
+        <div className="plan-card-actions">
+          <button type="button" className="btn-whatsapp" onClick={() => shareOnWhatsApp(d)}>
+            <span aria-hidden>💬</span> Share on WhatsApp
+          </button>
+          <button type="button" className="btn-danger" onClick={onRemove} disabled={busy}>
+            Cancel night
+          </button>
+        </div>
+      )}
+
+      {!d.locked && (
         <div className="plan-card-actions">
           {!setup ? (
             <>
@@ -378,7 +522,7 @@ function PlanDateCard({ d, members, isLeader, canWrite, busy, onVote, onRemove, 
                 Set up tournament
               </button>
               <button type="button" className="btn-danger" onClick={onRemove} disabled={busy}>
-                Remove (HOST ONLY)
+                Cancel
               </button>
             </>
           ) : (
@@ -408,11 +552,8 @@ function PlanDateCard({ d, members, isLeader, canWrite, busy, onVote, onRemove, 
               <label>
                 Or use a member's address
                 <select
-                  defaultValue=""
-                  onChange={(e) => {
-                    handleMemberSelect(e.target.value);
-                    e.target.value = "";
-                  }}
+                  value={hostId}
+                  onChange={(e) => handleMemberSelect(e.target.value)}
                 >
                   <option value="">Select a member…</option>
                   {members.map((m) => (
@@ -423,6 +564,12 @@ function PlanDateCard({ d, members, isLeader, canWrite, busy, onVote, onRemove, 
                   ))}
                 </select>
               </label>
+              {hostName && (
+                <p className="plan-setup-host">
+                  <span aria-hidden>🏠</span> Hosted by <strong>{hostName}</strong>
+                  {venue ? ` — ${venue}` : ""}
+                </p>
+              )}
               <p className="plan-setup-note">
                 {d.voters.length} player{d.voters.length === 1 ? "" : "s"} agreed they can make it.
               </p>
@@ -431,7 +578,7 @@ function PlanDateCard({ d, members, isLeader, canWrite, busy, onVote, onRemove, 
                   type="button"
                   className="btn-save"
                   disabled={busy || !name.trim()}
-                  onClick={() => onSetup(name.trim(), venue.trim())}
+                  onClick={() => onSetup(name.trim(), venue.trim(), hostName)}
                 >
                   Create tournament
                 </button>
