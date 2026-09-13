@@ -1345,7 +1345,7 @@ a {
 .plan-share {
   display: flex;
   justify-content: center;
-  margin: 0 auto 1.6rem;
+  margin: 0.55rem auto 1.6rem;
 }
 
 .btn-whatsapp {
@@ -2333,6 +2333,24 @@ a {
   gap: 8px;
   font-size: 0.72rem;
 }
+.banter-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.banter-edit {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.72rem;
+  padding: 0;
+  opacity: 0.8;
+}
+.banter-edit:hover {
+  opacity: 1;
+}
 .banter-author {
   font-weight: 700;
   color: var(--felt-700);
@@ -2361,11 +2379,25 @@ a {
 }
 .banter-form {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 14px;
+  width: 100%;
+}
+.banter-author-select {
+  flex: 0 1 170px;
+  min-width: 0;
+  border: 1px solid var(--cream-300);
+  border-radius: 999px;
+  padding: 0.55rem 0.8rem;
+  font: inherit;
+  background: #fff;
+  color: var(--ink-900);
+  max-width: 100%;
 }
 .banter-input {
   flex: 1;
+  min-width: 0;
   border: 1px solid var(--cream-300);
   border-radius: 999px;
   padding: 0.55rem 1rem;
@@ -2383,6 +2415,20 @@ a {
   color: var(--ink-700);
   font-size: 0.9rem;
   font-style: italic;
+}
+
+@media (max-width: 640px) {
+  .banter-form {
+    align-items: stretch;
+  }
+
+  .banter-author-select {
+    flex: 1 1 100%;
+  }
+
+  .banter-input {
+    flex: 1 1 100%;
+  }
 }
 
 /* ----- member add / edit ----- */

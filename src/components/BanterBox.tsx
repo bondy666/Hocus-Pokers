@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { getBanter, postBanter, deleteBanter, type BanterMessage } from "../api.ts";
+import { getBanter, postBanter, updateBanter, deleteBanter, type BanterMessage } from "../api.ts";
 import { useClub } from "../ClubContext.ts";
 
 const MAX = 500;
@@ -18,12 +18,14 @@ function timeAgo(iso?: string): string {
 }
 
 export default function BanterBox() {
-  const { user, source } = useClub();
+  const { user, source, members } = useClub();
   const canPost = !!user && source !== "seed";
 
   const [messages, setMessages] = useState<BanterMessage[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [text, setText] = useState("");
+  const [authorName, setAuthorName] = useState("");
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const threadRef = useRef<HTMLDivElement>(null);
@@ -50,18 +52,38 @@ export default function BanterBox() {
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
     const body = text.trim();
-    if (!body) return;
+    if (!body || !authorName) return;
     try {
       setBusy(true);
       setError(null);
-      const msg = await postBanter(body);
-      setMessages((m) => [...m, msg]);
+      if (editingId !== null) {
+        const msg = await updateBanter(editingId, body, authorName);
+        setMessages((m) => m.map((item) => item.id === msg.id ? msg : item));
+      } else {
+        const msg = await postBanter(body, authorName);
+        setMessages((m) => [...m, msg]);
+      }
       setText("");
+      setAuthorName("");
+      setEditingId(null);
     } catch (err: any) {
       setError(err.message || "Couldn't post that");
     } finally {
       setBusy(false);
     }
+  };
+
+  const startEditing = (message: BanterMessage) => {
+    setEditingId(message.id);
+    setText(message.body);
+    setAuthorName(message.author);
+    setError(null);
+  };
+
+  const cancelEditing = () => {
+    setEditingId(null);
+    setText("");
+    setAuthorName("");
   };
 
   const onDelete = async (id: number) => {
@@ -91,14 +113,14 @@ export default function BanterBox() {
               <span className="banter-author">{m.author}</span>
               <span className="banter-time">{timeAgo(m.createdAt)}</span>
               {m.mine && (
-                <button
-                  type="button"
-                  className="banter-del"
-                  title="Delete"
-                  onClick={() => onDelete(m.id)}
-                >
-                  ✕
-                </button>
+                <span className="banter-actions">
+                  <button type="button" className="banter-edit" onClick={() => startEditing(m)}>
+                    Edit
+                  </button>
+                  <button type="button" className="banter-del" title="Delete" onClick={() => onDelete(m.id)}>
+                    ✕
+                  </button>
+                </span>
               )}
             </div>
             <p className="banter-body">{m.body}</p>
@@ -110,6 +132,24 @@ export default function BanterBox() {
 
       {canPost ? (
         <form className="banter-form" onSubmit={onSubmit}>
+          <select
+            className="banter-author-select"
+            aria-label="Who said it?"
+            value={authorName}
+            onChange={(e) => setAuthorName(e.target.value)}
+            disabled={busy}
+          >
+            <option value="">Who said it?</option>
+            {members.map((member) => (
+              <option key={member.id} value={member.name}>{member.name}</option>
+            ))}
+            {authorName && !members.some((member) => member.name === authorName) && (
+              <option value={authorName}>{authorName}</option>
+            )}
+            {user.name && !members.some((member) => member.name === user.name) && (
+              <option value={user.name}>{user.name}</option>
+            )}
+          </select>
           <input
             type="text"
             className="banter-input"
@@ -119,9 +159,12 @@ export default function BanterBox() {
             onChange={(e) => setText(e.target.value)}
             disabled={busy}
           />
-          <button type="submit" className="btn-save" disabled={busy || !text.trim()}>
-            {busy ? "Posting…" : "Post"}
+          <button type="submit" className="btn-save" disabled={busy || !text.trim() || !authorName}>
+            {busy ? (editingId !== null ? "Saving…" : "Posting…") : editingId !== null ? "Save" : "Post"}
           </button>
+          {editingId !== null && (
+            <button type="button" className="btn-ghost" onClick={cancelEditing} disabled={busy}>Cancel</button>
+          )}
         </form>
       ) : (
         <p className="banter-signin">Sign in on the Trophy Room page to join the banter.</p>

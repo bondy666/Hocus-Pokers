@@ -1473,7 +1473,7 @@ app.get("/api/banter", async (req, res) => {
   }
 });
 
-// Post a message. Any signed-in member may do this.
+// Post a message. Any signed-in member may do this, choosing who said it.
 app.post("/api/banter", async (req, res) => {
   if (!requireDb(res)) return;
   const principal = requireSignedIn(req, res);
@@ -1481,13 +1481,16 @@ app.post("/api/banter", async (req, res) => {
   try {
     await ensureBanterSchema();
     const body = String(req.body?.body ?? "").trim();
+    const authorName = String(req.body?.authorName ?? "").trim();
     if (!body) return res.status(400).json({ error: "Message can't be empty" });
     if (body.length > 500) return res.status(400).json({ error: "Message is too long (max 500)" });
+    if (!authorName) return res.status(400).json({ error: "Choose who said it" });
+    if (authorName.length > 160) return res.status(400).json({ error: "Speaker name is too long" });
     const pool = await getPool();
     const result = await pool
       .request()
       .input("Email", sql.NVarChar(160), principal.email)
-      .input("Name", sql.NVarChar(160), principal.name || null)
+      .input("Name", sql.NVarChar(160), authorName)
       .input("Body", sql.NVarChar(500), body)
       .query(`
         INSERT INTO dbo.banter (author_email, author_name, body)
@@ -1504,6 +1507,43 @@ app.post("/api/banter", async (req, res) => {
     });
   } catch (err: any) {
     serverError(res, "Failed to post message", err);
+  }
+});
+
+// Edit a message and/or correct the person it was attributed to. Only the
+// original poster or an admin may change it.
+app.put("/api/banter/:id", async (req, res) => {
+  if (!requireDb(res)) return;
+  const principal = requireSignedIn(req, res);
+  if (!principal) return;
+  try {
+    await ensureBanterSchema();
+    const id = Number(req.params.id);
+    const body = String(req.body?.body ?? "").trim();
+    const authorName = String(req.body?.authorName ?? "").trim();
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "valid message id is required" });
+    if (!body) return res.status(400).json({ error: "Message can't be empty" });
+    if (body.length > 500) return res.status(400).json({ error: "Message is too long (max 500)" });
+    if (!authorName) return res.status(400).json({ error: "Choose who said it" });
+    if (authorName.length > 160) return res.status(400).json({ error: "Speaker name is too long" });
+    const header = req.headers["x-ms-client-principal"];
+    const isAdmin = evaluateWriteAccess(typeof header === "string" ? header : undefined, authOptions).ok;
+    const pool = await getPool();
+    const result = await pool.request()
+      .input("Id", sql.Int, id)
+      .input("Email", sql.NVarChar(160), principal.email)
+      .input("Body", sql.NVarChar(500), body)
+      .input("Name", sql.NVarChar(160), authorName)
+      .query(`
+        UPDATE dbo.banter
+        SET body = @Body, author_name = @Name
+        OUTPUT INSERTED.id, INSERTED.author_email, INSERTED.author_name, INSERTED.body, INSERTED.created_at
+        WHERE id = @Id AND (author_email = @Email OR ${isAdmin ? "1 = 1" : "1 = 0"})
+      `);
+    if (result.recordset.length === 0) return res.status(404).json({ error: "Message not found or not editable" });
+    res.json(banterDto(result.recordset[0], principal.email.toLowerCase()));
+  } catch (err: any) {
+    serverError(res, "Failed to update message", err);
   }
 });
 

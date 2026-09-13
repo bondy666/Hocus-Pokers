@@ -358,8 +358,11 @@ export interface BanterMessage {
 
 export const getBanter = () => getJson<BanterMessage[]>("/api/banter");
 
-export const postBanter = (body: string) =>
-  postJson<BanterMessage>("/api/banter", { body });
+export const postBanter = (body: string, authorName: string) =>
+  postJson<BanterMessage>("/api/banter", { body, authorName });
+
+export const updateBanter = (id: number, body: string, authorName: string) =>
+  sendJson<BanterMessage>("PUT", `/api/banter/${id}`, { body, authorName });
 
 export const deleteBanter = (id: number) =>
   sendJson<{ ok: boolean }>("DELETE", `/api/banter/${id}`);
