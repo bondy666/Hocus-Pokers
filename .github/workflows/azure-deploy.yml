@@ -14,9 +14,6 @@
 name: Build and deploy Hocus Pokers to Azure
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 env:
