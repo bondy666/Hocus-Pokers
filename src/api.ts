@@ -374,6 +374,7 @@ export interface CurrentUser {
   name: string;
   provider: string;
   canWrite: boolean;
+  memberId?: string;
 }
 
 export type AuthProvider = "google" | "aad";
@@ -393,6 +394,11 @@ export const loginUrl = (provider: AuthProvider, redirectTo: string = "/admin"):
 
 export const logoutUrl = (): string =>
   `${API_BASE}/.auth/logout?post_logout_redirect_uri=${encodeURIComponent("/")}`;
+
+export const loginWithClubPassword = (memberId: string, password: string) =>
+  postJson<CurrentUser>("/api/login/club", { memberId, password });
+
+export const clubLogoutUrl = (): string => `${API_BASE}/api/logout/club`;
 
 type AuthClaim = { typ: string; val: string };
 

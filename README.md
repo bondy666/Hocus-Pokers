@@ -93,18 +93,20 @@ npm --prefix server test
 member may save — there is no organiser-only restriction. They return `401`
 when not signed in, and `503` in seed mode (no database).
 
-## Authentication (Google / Microsoft sign-in)
+## Authentication (Google / Microsoft / club password)
 
-Sign-in is handled by **Azure App Service "Easy Auth"** — no passwords or tokens
-are handled by the app. Easy Auth runs the Google / Microsoft OAuth flow, then
-forwards the signed-in user to the server in an `x-ms-client-principal` header,
-which the API reads in [`server/src/index.ts`](server/src/index.ts). The pure,
-testable auth logic (principal decoding, allow-list, access decisions) lives in
-[`server/src/auth.ts`](server/src/auth.ts) and is covered by unit tests.
+Google and Microsoft sign-in are handled by **Azure App Service "Easy Auth"**,
+which forwards the signed-in user to the server in an `x-ms-client-principal`
+header. The optional shared club-password login is checked by the API and uses
+a signed, HTTP-only session cookie.
 
 - **Login**: the UI links to `/.auth/login/google` and `/.auth/login/aad`.
+- **Club login**: set `CLUB_LOGIN_PASSWORD` and `CLUB_SESSION_SECRET` in the
+  server environment. The session secret must be a separate random value of at
+  least 32 characters. Neither value belongs in frontend/Vite configuration.
 - **Who am I**: the UI reads `/.auth/me` (production) or `/api/me` (fallback).
-- **Logout**: `/.auth/logout`.
+- **Logout**: Easy Auth users use `/.auth/logout`; club-password users clear
+  their session cookie via `/api/logout/club`.
 - **Microsoft** is configured with the `common` tenant, so both work/school and
   personal Microsoft (Outlook/Hotmail) accounts can sign in. **Google** covers
   any Gmail / Google account.
@@ -128,9 +130,10 @@ Score Keeper forms without the OAuth proxy.
 ### Score Keeper (admin UI)
 
 The **Score Keeper** section provides forms to record a result, award a trophy and
-add a tournament. When signed out it shows **Sign in with Google** / **Sign in with
-Microsoft** buttons; when signed in it shows the account and a **Sign out** link,
-and enables the forms. Requests are same-origin and authenticated by cookie.
+add a tournament. When signed out, members can choose their name and enter the
+shared club password; Google and Microsoft sign-in remain available as
+alternatives. When signed in it shows the account and a **Sign out** link, and
+enables the forms. Requests are authenticated by cookie.
 
 ## Infrastructure (Bicep)
 

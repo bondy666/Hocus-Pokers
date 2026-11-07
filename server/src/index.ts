@@ -13,7 +13,9 @@ import { getPool, sql, sqlConfigured } from "./db/sql";
 import {
   parseEmailList,
   resolvePrincipal,
-  evaluateWriteAccess,
+  createClubSessionToken,
+  resolveClubSession,
+  verifyClubPassword,
   canWrite,
   type AuthOptions,
 } from "./auth";
@@ -32,7 +34,7 @@ const corsOrigins = (process.env.CORS_ORIGINS || "http://localhost:5173")
   .map((o) => o.trim())
   .filter(Boolean);
 
-app.use(cors({ origin: corsOrigins, methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"] }));
+app.use(cors({ origin: corsOrigins, credentials: true, methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"] }));
 app.use(express.json());
 
 // Resolve the built frontend regardless of the working directory.
@@ -510,6 +512,7 @@ interface Principal {
   email: string;
   name: string;
   provider: string;
+  memberId?: string;
 }
 
 const authOptions: AuthOptions = {
@@ -518,20 +521,56 @@ const authOptions: AuthOptions = {
   adminEmails: parseEmailList(process.env.ADMIN_EMAILS),
 };
 
+const clubLoginPassword = process.env.CLUB_LOGIN_PASSWORD;
+const clubSessionSecret = process.env.CLUB_SESSION_SECRET;
+const clubLoginEnabled = Boolean(clubLoginPassword && clubSessionSecret && clubSessionSecret.length >= 32);
+if ((clubLoginPassword || clubSessionSecret) && !clubLoginEnabled) {
+  console.error("Club password login is disabled: set CLUB_LOGIN_PASSWORD and a CLUB_SESSION_SECRET of at least 32 characters.");
+}
+
+function isSecureRequest(req: express.Request): boolean {
+  return process.env.NODE_ENV === "production" || req.headers["x-forwarded-proto"] === "https";
+}
+
+function clubSessionCookie(token: string, req: express.Request): string {
+  return `hocus_club_session=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${30 * 24 * 60 * 60}${isSecureRequest(req) ? "; Secure" : ""}`;
+}
+
+function readClubSessionCookie(req: express.Request): string | undefined {
+  const cookieHeader = req.headers.cookie;
+  if (!cookieHeader) return undefined;
+  for (const part of cookieHeader.split(";")) {
+    const [name, ...value] = part.trim().split("=");
+    if (name === "hocus_club_session") return value.join("=");
+  }
+  return undefined;
+}
+
 function getPrincipal(req: express.Request): Principal | null {
   const header = req.headers["x-ms-client-principal"];
-  return resolvePrincipal(typeof header === "string" ? header : undefined, authOptions);
+  const headerPrincipal = resolvePrincipal(
+    typeof header === "string" ? header : undefined,
+    { ...authOptions, allowDevAuth: false },
+  );
+  return (
+    headerPrincipal ||
+    resolveClubSession(readClubSessionCookie(req), clubSessionSecret) ||
+    (authOptions.allowDevAuth ? resolvePrincipal(undefined, authOptions) : null)
+  );
 }
 
 // Gate a write behind a signed-in (and, if configured, allow-listed) user.
 function requireUser(req: express.Request, res: express.Response): Principal | null {
-  const header = req.headers["x-ms-client-principal"];
-  const result = evaluateWriteAccess(typeof header === "string" ? header : undefined, authOptions);
-  if (!result.ok) {
-    res.status(result.status).json({ error: result.error });
+  const principal = getPrincipal(req);
+  if (!principal || !principal.email) {
+    res.status(401).json({ error: "Sign in required" });
     return null;
   }
-  return result.principal;
+  if (!canWrite(principal, authOptions.adminEmails)) {
+    res.status(403).json({ error: "Your account is not permitted to make changes" });
+    return null;
+  }
+  return principal;
 }
 
 function requireDb(res: express.Response): boolean {
@@ -562,6 +601,43 @@ function requireSignedIn(req: express.Request, res: express.Response): Principal
   }
   return principal;
 }
+
+app.post("/api/login/club", async (req, res) => {
+  if (!clubLoginEnabled || !clubLoginPassword || !clubSessionSecret) {
+    return res.status(503).json({ error: "Club password login is not configured on the server." });
+  }
+  if (!verifyClubPassword(req.body?.password, clubLoginPassword)) {
+    return res.status(401).json({ error: "Incorrect club password." });
+  }
+
+  const memberId = req.body?.memberId;
+  if (typeof memberId !== "string" || !memberId) {
+    return res.status(400).json({ error: "Select your member name." });
+  }
+  try {
+    const member = (await loadMembers()).find((candidate) => candidate.id === memberId);
+    if (!member) return res.status(400).json({ error: "Select a valid club member." });
+    const principal: Principal = {
+      email: member.email?.trim().toLowerCase() || `member-${member.id}@hocuspokers.local`,
+      name: member.name,
+      memberId: member.id,
+      provider: "club-password",
+    };
+    const token = createClubSessionToken(clubSessionSecret, principal);
+    res.setHeader("Set-Cookie", clubSessionCookie(token, req));
+    res.json({ ...principal, canWrite: true });
+  } catch (err) {
+    serverError(res, "Failed to verify club member", err);
+  }
+});
+
+app.get("/api/logout/club", (req, res) => {
+  res.setHeader(
+    "Set-Cookie",
+    `hocus_club_session=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0${isSecureRequest(req) ? "; Secure" : ""}`,
+  );
+  res.redirect("/");
+});
 
 // Current signed-in user (or 401). Used by the frontend to show auth state,
 // especially in local dev where Easy Auth's /.auth/me is unavailable.
@@ -1526,8 +1602,7 @@ app.put("/api/banter/:id", async (req, res) => {
     if (body.length > 500) return res.status(400).json({ error: "Message is too long (max 500)" });
     if (!authorName) return res.status(400).json({ error: "Choose who said it" });
     if (authorName.length > 160) return res.status(400).json({ error: "Speaker name is too long" });
-    const header = req.headers["x-ms-client-principal"];
-    const isAdmin = evaluateWriteAccess(typeof header === "string" ? header : undefined, authOptions).ok;
+    const isAdmin = canWrite(principal, authOptions.adminEmails);
     const pool = await getPool();
     const result = await pool.request()
       .input("Id", sql.Int, id)
@@ -1567,11 +1642,7 @@ app.delete("/api/banter/:id", async (req, res) => {
       return res.status(404).json({ error: "Message not found" });
     }
     const authorEmail = String(found.recordset[0].author_email ?? "").toLowerCase();
-    const header = req.headers["x-ms-client-principal"];
-    const isAdmin = evaluateWriteAccess(
-      typeof header === "string" ? header : undefined,
-      authOptions
-    ).ok;
+    const isAdmin = canWrite(principal, authOptions.adminEmails);
     if (authorEmail !== principal.email.toLowerCase() && !isAdmin) {
       return res.status(403).json({ error: "You can only delete your own messages" });
     }

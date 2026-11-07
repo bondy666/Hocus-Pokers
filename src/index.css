@@ -755,6 +755,55 @@ a {
   background: #0067b8;
 }
 
+.club-password-form {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  width: 100%;
+  margin-top: 0.9rem;
+}
+
+.club-password-prompt {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--cream-100);
+  font-size: 0.9rem;
+}
+
+.club-password-form input {
+  min-width: 190px;
+  padding: 0.65rem 0.9rem;
+  border: 1px solid var(--gold-400);
+  border-radius: 999px;
+  background: var(--cream-100);
+  color: var(--ink-900);
+  font: inherit;
+}
+
+.club-password-form select {
+  min-width: 190px;
+  padding: 0.65rem 0.9rem;
+  border: 1px solid var(--gold-400);
+  border-radius: 999px;
+  background: var(--cream-100);
+  color: var(--ink-900);
+  font: inherit;
+}
+
+.club-password-button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.club-password-error {
+  flex-basis: 100%;
+  margin: 0;
+  color: #ffc9b8;
+  font-size: 0.85rem;
+}
+
 .admin-user {
   display: inline-flex;
   align-items: center;
@@ -3204,4 +3253,3 @@ a {
   width: auto;
   margin: 0;
 }
-

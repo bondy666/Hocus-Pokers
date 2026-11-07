@@ -1,6 +1,8 @@
 import { CLUB, headlineStats, gbp } from "../data.ts";
 import { useClub } from "../ClubContext.ts";
 import { loginUrl, logoutUrl } from "../api.ts";
+import { clubLogoutUrl } from "../api.ts";
+import ClubPasswordLogin from "../components/ClubPasswordLogin.tsx";
 
 export default function Hero() {
   const { members, tournaments, user, authChecked } = useClub();
@@ -31,12 +33,14 @@ export default function Hero() {
               <span className="hero-auth-info">
                 Signed in as <strong>{user.name || user.email}</strong>
               </span>
-              <a className="hero-signout" href={logoutUrl()}>
+              <a className="hero-signout" href={user.provider === "club-password" ? clubLogoutUrl() : logoutUrl()}>
                 Sign out
               </a>
             </div>
           ) : (
             <div className="hero-login-buttons">
+              <ClubPasswordLogin redirectTo="/" />
+              <p className="hero-auth-hint">Or sign in with:</p>
               <a className="login-btn google" href={loginUrl("google")}>
                 <span className="login-icon">G</span> Sign in with Google
               </a>

@@ -1,3 +1,5 @@
+import crypto from "crypto";
+
 // Pure, testable authentication helpers for Hocus Pokers.
 //
 // In production, Azure App Service "Easy Auth" handles the Google / Microsoft
@@ -9,6 +11,7 @@ export interface Principal {
   email: string;
   name: string;
   provider: string;
+  memberId?: string;
 }
 
 export interface AuthOptions {
@@ -18,6 +21,87 @@ export interface AuthOptions {
   allowDevAuth: boolean;
   /** Email to use for the simulated dev user. */
   devUserEmail: string;
+}
+
+export const CLUB_SESSION_DURATION_SECONDS = 30 * 24 * 60 * 60;
+
+/** Compare a submitted shared password without leaking matching prefix length. */
+export function verifyClubPassword(candidate: unknown, configuredPassword: string | undefined): boolean {
+  if (typeof candidate !== "string" || !configuredPassword || candidate.length > 1024) {
+    return false;
+  }
+  const candidateHash = crypto.createHash("sha256").update(candidate).digest();
+  const configuredHash = crypto.createHash("sha256").update(configuredPassword).digest();
+  return crypto.timingSafeEqual(candidateHash, configuredHash);
+}
+
+/** Create a signed, expiring token for the selected club member. */
+export function createClubSessionToken(
+  secret: string,
+  principal: Pick<Principal, "email" | "name" | "memberId">,
+  now = Date.now(),
+): string {
+  const payload = Buffer.from(
+    JSON.stringify({
+      expiresAt: Math.floor(now / 1000) + CLUB_SESSION_DURATION_SECONDS,
+      email: principal.email,
+      name: principal.name,
+      memberId: principal.memberId,
+    }),
+  ).toString("base64url");
+  const signature = crypto.createHmac("sha256", secret).update(payload).digest("base64url");
+  return `${payload}.${signature}`;
+}
+
+/** Resolve a valid shared-password session token into its member principal. */
+export function resolveClubSession(
+  token: string | undefined,
+  secret: string | undefined,
+  now = Date.now(),
+): Principal | null {
+  if (!token || !secret) return null;
+  const [payload, signature, ...extra] = token.split(".");
+  if (extra.length > 0 || !payload || !signature) return null;
+  const expected = crypto.createHmac("sha256", secret).update(payload).digest("base64url");
+  const actualBytes = Buffer.from(signature);
+  const expectedBytes = Buffer.from(expected);
+  if (actualBytes.length !== expectedBytes.length || !crypto.timingSafeEqual(actualBytes, expectedBytes)) {
+    return null;
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    if (!parsed || typeof parsed !== "object") return null;
+    const session = parsed as {
+      expiresAt?: unknown;
+      email?: unknown;
+      name?: unknown;
+      memberId?: unknown;
+    };
+    const nowSeconds = Math.floor(now / 1000);
+    if (
+      typeof session.expiresAt !== "number" ||
+      !Number.isSafeInteger(session.expiresAt) ||
+      session.expiresAt <= nowSeconds ||
+      session.expiresAt > nowSeconds + CLUB_SESSION_DURATION_SECONDS ||
+      typeof session.email !== "string" ||
+      !session.email ||
+      typeof session.name !== "string" ||
+      !session.name ||
+      typeof session.memberId !== "string" ||
+      !session.memberId
+    ) {
+      return null;
+    }
+    return {
+      email: session.email,
+      name: session.name,
+      memberId: session.memberId,
+      provider: "club-password",
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** Parse a comma-separated env value into a lower-cased, trimmed list. */

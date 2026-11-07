@@ -3,6 +3,10 @@ import {
   parseEmailList,
   parsePrincipalHeader,
   resolvePrincipal,
+  createClubSessionToken,
+  resolveClubSession,
+  verifyClubPassword,
+  CLUB_SESSION_DURATION_SECONDS,
   canWrite,
   evaluateWriteAccess,
   type AuthOptions,
@@ -46,6 +50,36 @@ describe("parseEmailList", () => {
   it("returns [] for undefined or empty", () => {
     expect(parseEmailList(undefined)).toEqual([]);
     expect(parseEmailList("")).toEqual([]);
+  });
+});
+
+describe("club password login", () => {
+  it("checks a configured password without accepting missing or non-string input", () => {
+    expect(verifyClubPassword("known-password", "known-password")).toBe(true);
+    expect(verifyClubPassword("wrong-password", "known-password")).toBe(false);
+    expect(verifyClubPassword(undefined, "known-password")).toBe(false);
+    expect(verifyClubPassword("known-password", undefined)).toBe(false);
+  });
+
+  it("creates and validates a signed expiring club session", () => {
+    const now = 1_800_000_000_000;
+    const member = {
+      email: "simon@example.com",
+      name: "Simon Bond",
+      memberId: "5",
+    };
+    const token = createClubSessionToken("a-session-secret-that-is-long-enough", member, now);
+    expect(resolveClubSession(token, "a-session-secret-that-is-long-enough", now)).toEqual({
+      ...member,
+      provider: "club-password",
+    });
+    expect(resolveClubSession(token, "a-different-session-secret", now)).toBeNull();
+    expect(resolveClubSession(`${token}x`, "a-session-secret-that-is-long-enough", now)).toBeNull();
+    expect(resolveClubSession(
+      token,
+      "a-session-secret-that-is-long-enough",
+      now + (CLUB_SESSION_DURATION_SECONDS + 1) * 1000,
+    )).toBeNull();
   });
 });
 

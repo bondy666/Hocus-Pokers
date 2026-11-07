@@ -9,10 +9,12 @@ import {
   deleteResult,
   loginUrl,
   logoutUrl,
+  clubLogoutUrl,
   type NewTrophy,
   type NewTournament,
   type ResultRow,
 } from "../api.ts";
+import ClubPasswordLogin from "../components/ClubPasswordLogin.tsx";
 import type { Member, Tournament } from "../data.ts";
 
 type Note = { kind: "ok" | "err"; text: string } | null;
@@ -56,13 +58,15 @@ export default function Admin() {
                 Signed in as <strong>{user.name || user.email}</strong>
                 <span className="admin-provider">via {providerLabel(user.provider)}</span>
               </span>
-              <a className="admin-signout" href={logoutUrl()}>
+              <a className="admin-signout" href={user.provider === "club-password" ? clubLogoutUrl() : logoutUrl()}>
                 Sign out
               </a>
             </div>
           ) : (
             <div className="admin-login">
               <p className="admin-auth-hint">Sign in to manage the club records.</p>
+              <ClubPasswordLogin redirectTo="/admin" />
+              <p className="admin-auth-hint">Or sign in with:</p>
               <div className="admin-login-buttons">
                 <a className="login-btn google" href={loginUrl("google")}>
                   <span className="login-icon">G</span> Sign in with Google
@@ -561,6 +565,8 @@ function providerLabel(provider: string): string {
       return "Microsoft";
     case "dev":
       return "dev mode";
+    case "club-password":
+      return "club password";
     default:
       return provider;
   }
