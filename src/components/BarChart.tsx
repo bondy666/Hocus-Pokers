@@ -47,6 +47,14 @@ export default function BarChart({ items, yMax = 10000, height = 320, format = d
   const n = Math.max(items.length, 1);
   const slot = plotW / n;
   const barW = Math.min(46, slot * 0.6);
+  const maxAxisLabels = 8;
+  const axisLabelIndexes = new Set(
+    items.length <= maxAxisLabels
+      ? items.map((_, i) => i)
+      : Array.from({ length: maxAxisLabels }, (_, i) =>
+          Math.round((i * (items.length - 1)) / (maxAxisLabels - 1))
+        )
+  );
 
   const ticks = useMemo(() => {
     const out: number[] = [];
@@ -87,9 +95,11 @@ export default function BarChart({ items, yMax = 10000, height = 320, format = d
               <rect x={cx - barW / 2} y={top} width={barW} height={h} rx={3} fill={fill}>
                 <title>{`${d.label}: ${format(d.value)}`}</title>
               </rect>
-              <text x={cx} y={H - padB + 18} className="chart-axis-label" textAnchor="middle">
-                {short}
-              </text>
+              {axisLabelIndexes.has(i) && (
+                <text x={cx} y={H - padB + 18} className="chart-axis-label" textAnchor="middle">
+                  {short}
+                </text>
+              )}
             </g>
           );
         })}
