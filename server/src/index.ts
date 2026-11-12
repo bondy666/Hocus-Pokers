@@ -1951,7 +1951,8 @@ app.delete("/api/planning/dates/:id", async (req, res) => {
   }
 });
 
-// Lock a proposed date in as the next tournament night (organiser only).
+// Lock a proposed date in as a tournament night (organiser only). Multiple
+// dates can remain locked so the club can plan several nights in advance.
 // This does NOT create a tournament yet — it freezes voting and keeps the
 // agreed players visible on the planner until game day, when the organiser
 // hits "Start game" from the Tournaments page.
@@ -1983,16 +1984,6 @@ app.post("/api/planning/dates/:id/setup", async (req, res) => {
     if (updated.recordset.length === 0) {
       return res.status(404).json({ error: "Date not found" });
     }
-    // Locking in a night settles the plan, so clear away the other proposed
-    // alternatives (their votes cascade-delete). Any already-locked night is
-    // left untouched.
-    await pool
-      .request()
-      .input("Id", sql.Int, dateId)
-      .query(`
-        DELETE FROM dbo.planning_dates
-        WHERE id <> @Id AND locked_at IS NULL
-      `);
     res.json({ id: dateId, locked: true });
   } catch (err: any) {
     serverError(res, "Failed to lock in the date", err);

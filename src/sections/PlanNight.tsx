@@ -138,7 +138,7 @@ export default function PlanNight() {
 
   const planUrl = "https://hocuspokers.com/plan";
   const whatsappShareUrl = useMemo(() => {
-    const lines = ["🃏 Time to plan the next poker night!"];
+    const lines = ["🃏 Time to plan upcoming poker nights!"];
     if (sorted.length > 0) {
       lines.push("", "Proposed dates so far:");
       for (const d of sorted) {
@@ -200,7 +200,7 @@ export default function PlanNight() {
   const handleRemove = async (id: number) => {
     const target = dates.find((x) => x.id === id);
     const msg = target?.locked
-      ? "Cancel this locked-in night? Planning reopens for a new date."
+      ? "Cancel this locked-in night? Other planned nights and proposed dates will stay."
       : "Cancel this proposed date? It will be removed for everyone.";
     if (!confirm(msg)) return;
     try {
@@ -217,9 +217,9 @@ export default function PlanNight() {
   return (
     <section className="section felt" id="plan">
       <div className="section-inner">
-        <h2 className="section-title">Plan the Next Night</h2>
+        <h2 className="section-title">Plan Tournament Nights</h2>
         <p className="section-sub">
-          Propose dates, vote for the ones you can make, then lock in the tournament.
+          Propose dates, vote for the ones you can make, and lock in multiple upcoming nights.
         </p>
 
         {source === "seed" && (
@@ -304,7 +304,7 @@ export default function PlanNight() {
               })}
             </div>
             <p className="cal-hint">
-              Tap a free day to propose it, then add players on the date card below — no sign-in needed.
+              Tap free days to propose them, then add players on each date card — no sign-in needed.
             </p>
           </div>
 
@@ -312,7 +312,7 @@ export default function PlanNight() {
             {loading ? (
               <p className="stats-note">Loading proposed dates…</p>
             ) : sorted.length === 0 ? (
-              <p className="stats-note">No dates proposed yet. Pick one from the calendar.</p>
+              <p className="stats-note">No dates planned yet. Pick one or more from the calendar.</p>
             ) : (
               sorted.map((d) => (
                 <PlanDateCard

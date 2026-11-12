@@ -200,7 +200,7 @@ export interface PlanningDate {
   voteCount: number;
   voters: PlanningVoter[];
   votedByMe: boolean;
-  locked?: boolean; // date is locked in as the next tournament night
+  locked?: boolean; // date is locked in as a planned tournament night
   name?: string; // agreed tournament name (once locked)
   venue?: string; // agreed venue (once locked)
   host?: string; // hosting member's name (once locked, if a member's address is used)
@@ -228,8 +228,8 @@ export const toggleAttendee = (id: number, userId: string) =>
     { userId: Number(userId) }
   );
 
-// Lock a proposed date in as the next tournament night. Freezes voting and
-// keeps the agreed players on the planner; no tournament is created yet.
+// Lock a proposed date in as a tournament night. Freezes voting and keeps the
+// agreed players on the planner; no tournament is created yet.
 export const lockPlanningDate = (id: number, body: { name: string; venue?: string; host?: string }) =>
   postJson<{ id: number; locked: boolean }>(`/api/planning/dates/${id}/setup`, body);
 
